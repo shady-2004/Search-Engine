@@ -10,8 +10,8 @@ import static java.lang.Math.log;
 public class Ranker {
     static final int threads = 10;
 
-    private Integer docScore(TestData.DocumentData docData) {
-        int score = 0;
+    private Double docScore(TestData.DocumentData docData) {
+        double score = 0;
 
         List<String> queryTerms = TestData.getQueryTerms();
         Map<String, Integer> TermFrequencies = docData.getTermFrequencies();
@@ -19,14 +19,14 @@ public class Ranker {
 
         int N = TestData.getTotalDocuments();
         for (String queryTerm : queryTerms) {
-            score += (int) (TermFrequencies.get(queryTerm) * log((double) N / DocumentFrequencies.get(queryTerm)));
+            score +=  (TermFrequencies.get(queryTerm) * log((double) N / DocumentFrequencies.get(queryTerm)));
         }
         return score;
     }
 
     public List<Integer> Rank() throws InterruptedException {
         List<TestData.DocumentData> Documents = TestData.getCandidateDocuments();
-        ConcurrentHashMap<Integer, Integer> results = new ConcurrentHashMap<>();
+        ConcurrentHashMap<Integer, Double> results = new ConcurrentHashMap<>();
 
         List<Integer> rankedDocs = new ArrayList<>();
 
@@ -35,17 +35,17 @@ public class Ranker {
         for(RankParallel t:threadList)
             t.join();
 
-        List<Map.Entry<Integer, Integer>> sortedDocs = new ArrayList<>(results.entrySet());
+        List<Map.Entry<Integer, Double>> sortedDocs = new ArrayList<>(results.entrySet());
         sortedDocs.sort((d1, d2) -> d2.getValue().compareTo(d1.getValue()));
 
-        for (Map.Entry<Integer, Integer> entry : sortedDocs) {
+        for (Map.Entry<Integer, Double> entry : sortedDocs) {
             rankedDocs.add(entry.getKey());
         }
 
         return rankedDocs;
     }
 
-    private List<RankParallel> getRankParallels(List<TestData.DocumentData> Documents, ConcurrentHashMap<Integer, Integer> results) {
+    private List<RankParallel> getRankParallels(List<TestData.DocumentData> Documents, ConcurrentHashMap<Integer, Double> results) {
         int N = Documents.size();
         int docsPerThread;
         int maxThread;
@@ -71,15 +71,16 @@ public class Ranker {
         return threadList;
     }
 
+
     private class RankParallel extends Thread {
 
         int start;
         int end;
 
         List<TestData.DocumentData> Documents;
-        ConcurrentHashMap<Integer, Integer> results;
+        ConcurrentHashMap<Integer, Double> results;
 
-        RankParallel(int start, int end, List<TestData.DocumentData> Documents, ConcurrentHashMap<Integer, Integer> results) {
+        RankParallel(int start, int end, List<TestData.DocumentData> Documents, ConcurrentHashMap<Integer, Double> results) {
             this.start = start;
             this.end = end;
             this.Documents = Documents;
@@ -88,7 +89,7 @@ public class Ranker {
 
         public void run() {
 
-            Integer score;
+            Double score;
 
             for (int i = start; i < end; i++) {
                 score = docScore(Documents.get(i));
@@ -97,3 +98,4 @@ public class Ranker {
         }
     }
 }
+
