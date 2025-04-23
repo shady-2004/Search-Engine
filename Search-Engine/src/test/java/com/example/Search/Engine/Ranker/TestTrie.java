@@ -21,6 +21,7 @@ public class TestTrie {
         trie.insert("greeting", 17);
         trie.insert("god", 13);
         trie.insert("goodnight", 25);
+        trie.insert("goodnight bitches", 26);
 
         // Test Case 2: Get top suggestions for a specific prefix (no direct access to topSuggestions)
         System.out.println("\nGetting top suggestions for prefix 'go'...");
