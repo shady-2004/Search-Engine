@@ -8,6 +8,9 @@ import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 import org.springframework.stereotype.Component;
 import org.springframework.core.io.ClassPathResource;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 //Component responsible for tokenizing text and HTML documents.
 //Handles stopword removal, word validation, and position-based weighting.
@@ -127,60 +130,70 @@ public class Tokenizer {
 
     //Tokenizes an HTML document, processing different elements with appropriate weights.
     public Map<String, Token> tokenizeDocument(Document doc) {
-        Map<String, Token> tokens = new HashMap<>();
-        int totalTokens = 0;
+        ConcurrentHashMap<String, Token> tokens = new ConcurrentHashMap<>();
+        AtomicInteger totalTokens = new AtomicInteger(0);
 
         // Process title with highest weight
-        String title = doc.title();
-        processText(title, tokens, "title");
-        totalTokens += countTokens(title);
+        CompletableFuture<Void> titleFuture = CompletableFuture.runAsync(() -> {
+            String title = doc.title();
+            processText(title, tokens, "title");
+            totalTokens.addAndGet(countTokens(title));
+        });
 
-        // Process headings
-        Elements h1s = doc.select("h1");
-        for (Element h1 : h1s) {
-            processText(h1.text(), tokens, "h1");
-            totalTokens += countTokens(h1.text());
-        }
+        // Process headings in parallel
+        CompletableFuture<Void> h1Future = CompletableFuture.runAsync(() -> {
+            Elements h1s = doc.select("h1");
+            h1s.parallelStream().forEach(h1 -> {
+                processText(h1.text(), tokens, "h1");
+                totalTokens.addAndGet(countTokens(h1.text()));
+            });
+        });
 
-        Elements h2s = doc.select("h2");
-        for (Element h2 : h2s) {
-            processText(h2.text(), tokens, "h2");
-            totalTokens += countTokens(h2.text());
-        }
+        CompletableFuture<Void> h2Future = CompletableFuture.runAsync(() -> {
+            Elements h2s = doc.select("h2");
+            h2s.parallelStream().forEach(h2 -> {
+                processText(h2.text(), tokens, "h2");
+                totalTokens.addAndGet(countTokens(h2.text()));
+            });
+        });
 
-        // Process regular content
-        Elements paragraphs = doc.select("p");
-        for (Element p : paragraphs) {
-            processText(p.text(), tokens, "content");
-            totalTokens += countTokens(p.text());
-        }
+        // Process regular content in parallel
+        CompletableFuture<Void> contentFuture = CompletableFuture.runAsync(() -> {
+            Elements paragraphs = doc.select("p");
+            paragraphs.parallelStream().forEach(p -> {
+                processText(p.text(), tokens, "content");
+                totalTokens.addAndGet(countTokens(p.text()));
+            });
+        });
+
+        // Wait for all processing to complete
+        CompletableFuture.allOf(titleFuture, h1Future, h2Future, contentFuture).join();
 
         // Normalize frequencies
-        if (totalTokens > 0) {
-            for (Token token : tokens.values()) {
-                token.count /= totalTokens;
-            }
+        int finalTotalTokens = totalTokens.get();
+        if (finalTotalTokens > 0) {
+            tokens.values().parallelStream().forEach(token -> 
+                token.setCount(token.getCount() / finalTotalTokens));
         }
 
-        System.out.println("Processed document with " + totalTokens + " total tokens");
-        return tokens;
+        System.out.println("Processed document with " + finalTotalTokens + " total tokens");
+        return new HashMap<>(tokens);
     }
 
-    private void processText(String text, Map<String, Token> tokens, String position) {
-        List<String> words = tokenizeString(text, true);
-        for (String word : words) {
-            Token token = tokens.get(word);
-            if (token == null) {
-                token = new Token(word, 1.0, position);
-                tokens.put(word, token);
-            } else {
-                token.setCount(token.getCount() + 1.0);
-                // Keep the highest weighted position
-                if (getPositionWeight(position) > getPositionWeight(token.getPosition())) {
-                    token.setPosition(position);
+    private void processText(String text, ConcurrentHashMap<String, Token> tokens, String position) {
+        tokenizeString(text, true).parallelStream().forEach(word -> {
+            tokens.compute(word, (key, existingToken) -> {
+                if (existingToken == null) {
+                    return new Token(word, 1.0, position);
+                } else {
+                    existingToken.setCount(existingToken.getCount() + 1.0);
+                    if (getPositionWeight(position) > getPositionWeight(existingToken.getPosition())) {
+                        existingToken.setPosition(position);
+                    }
+                    return existingToken;
                 }
-            }
-        }
+            });
+        });
     }
 
     private int countTokens(String text) {

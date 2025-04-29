@@ -2,20 +2,26 @@ package com.example.Search.Engine.Indexer;
 
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
-import org.springframework.stereotype.Component;
-import org.springframework.core.io.ClassPathResource;
 import java.io.*;
 import java.sql.SQLException;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.core.io.ClassPathResource;
 
-@Component
+@Service
 public class Indexer implements AutoCloseable {
     private final SQLiteSearcher searcher;
     private final Tokenizer tokenizer;
 
-    public Indexer() throws SQLException {
-        this.searcher = new SQLiteSearcher();
-        this.tokenizer = new Tokenizer();
+    @Autowired
+    public Indexer(SQLiteSearcher searcher, Tokenizer tokenizer) {
+        this.searcher = searcher;
+        this.tokenizer = tokenizer;
     }
 
     public void indexDocument(String url, String htmlContent) throws IOException {
@@ -87,6 +93,10 @@ public class Indexer implements AutoCloseable {
     }
 
     public void indexDirectory(File directory) throws IOException {
+        long startTime = System.nanoTime();
+        Runtime runtime = Runtime.getRuntime();
+        long initialMemory = runtime.totalMemory() - runtime.freeMemory();
+
         System.out.println("\nIndexing directory: " + directory.getAbsolutePath());
         if (!directory.isDirectory()) {
             System.err.println("Error: Not a directory");
@@ -100,18 +110,85 @@ public class Indexer implements AutoCloseable {
         }
 
         System.out.println("Found " + files.length + " HTML files to index");
-        List<String> errors = new ArrayList<>();
+        List<String> errors = Collections.synchronizedList(new ArrayList<>());
 
+        // Create a thread pool for parallel processing
+        int processors = Runtime.getRuntime().availableProcessors();
+        ExecutorService executor = Executors.newFixedThreadPool(processors);
+        List<CompletableFuture<Map.Entry<String, Map<String, Tokenizer.Token>>>> futures = new ArrayList<>();
+
+        // First pass: collect all documents and tokens in parallel
+        long tokenizationStart = System.nanoTime();
         for (File file : files) {
+            CompletableFuture<Map.Entry<String, Map<String, Tokenizer.Token>>> future = CompletableFuture.supplyAsync(() -> {
+                long fileStart = System.nanoTime();
+                try {
+                    System.out.println("\n=== Processing file: " + file.getName() + " ===");
+                    String url = "file://" + file.getAbsolutePath();
+                    String content = readFileContent(file);
+                    Document doc = Jsoup.parse(content);
+                    Map<String, Tokenizer.Token> tokens = tokenizer.tokenizeDocument(doc);
+                    long fileEnd = System.nanoTime();
+                    System.out.printf("File %s processed in %.2f ms%n", 
+                        file.getName(), (fileEnd - fileStart) / 1_000_000.0);
+                    return Map.entry(url, tokens);
+                } catch (IOException e) {
+                    String error = String.format("Error processing %s: %s", file.getName(), e.getMessage());
+                    System.err.println(error);
+                    errors.add(error);
+                    return null;
+                }
+            }, executor);
+            futures.add(future);
+        }
+
+        // Wait for all processing to complete
+        List<Map.Entry<String, Map<String, Tokenizer.Token>>> results = futures.stream()
+            .map(CompletableFuture::join)
+            .filter(Objects::nonNull)
+            .toList();
+        long tokenizationEnd = System.nanoTime();
+
+        // Second pass: bulk write to database
+        System.out.println("\nWriting " + results.size() + " documents to database...");
+        long dbStart = System.nanoTime();
+        for (Map.Entry<String, Map<String, Tokenizer.Token>> entry : results) {
+            long docStart = System.nanoTime();
             try {
-                System.out.println("\n=== Processing file: " + file.getName() + " ===");
-                indexFile(file);
-            } catch (IOException e) {
-                String error = String.format("Error indexing %s: %s", file.getName(), e.getMessage());
+                searcher.addDocument(entry.getKey(), entry.getKey(), entry.getValue());
+                long docEnd = System.nanoTime();
+                System.out.printf("Document %s indexed in %.2f ms%n", 
+                    entry.getKey(), (docEnd - docStart) / 1_000_000.0);
+            } catch (Exception e) {
+                String error = String.format("Error indexing %s: %s", entry.getKey(), e.getMessage());
                 System.err.println(error);
                 errors.add(error);
             }
         }
+        long dbEnd = System.nanoTime();
+
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            executor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+
+        // Print performance metrics
+        long endTime = System.nanoTime();
+        long finalMemory = runtime.totalMemory() - runtime.freeMemory();
+        
+        System.out.println("\n=== Performance Metrics ===");
+        System.out.printf("Total indexing time: %.2f seconds%n", (endTime - startTime) / 1_000_000_000.0);
+        System.out.printf("Tokenization time: %.2f seconds%n", (tokenizationEnd - tokenizationStart) / 1_000_000_000.0);
+        System.out.printf("Database time: %.2f seconds%n", (dbEnd - dbStart) / 1_000_000_000.0);
+        System.out.printf("Average time per document: %.2f ms%n", 
+            (endTime - startTime) / (results.size() * 1_000_000.0));
+        System.out.printf("Memory used: %.2f MB%n", (finalMemory - initialMemory) / (1024.0 * 1024.0));
+        System.out.println("=========================");
 
         if (!errors.isEmpty()) {
             System.err.println("\nErrors occurred while indexing:");
@@ -141,28 +218,45 @@ public class Indexer implements AutoCloseable {
     }
 
     public static void main(String[] args) {
-        try (Indexer indexer = new Indexer()) {
-            String filename = "sample3.html";
-            ClassPathResource resource = new ClassPathResource(filename);
-            File sampleFile = resource.getFile();
+        SQLiteSearcher searcher = null;
+        try {
+            searcher = new SQLiteSearcher();
+            Tokenizer tokenizer = new Tokenizer();
+            Indexer indexer = new Indexer(searcher, tokenizer);
             
-            if (!sampleFile.exists()) {
-                System.err.println(filename + " not found at: " + sampleFile.getAbsolutePath());
+            // Get the current working directory
+            String currentDir = System.getProperty("user.dir");
+            System.out.println("Current working directory: " + currentDir);
+            
+            // Create path to the filesToIndex directory
+            File directory = new File(currentDir, "Search-Engine/src/main/resources/filesToIndex");
+            System.out.println("Looking for directory at: " + directory.getAbsolutePath());
+            
+            if (!directory.exists()) {
+                System.err.println("Error: Directory 'filesToIndex' not found. Please create it in: " + currentDir);
                 return;
             }
             
-            System.out.println("Found " + filename + " at: " + sampleFile.getAbsolutePath());
-            
-            try {
-                System.out.println("Indexing " + filename);
-                indexer.indexFile(sampleFile);
-                System.out.println("Successfully indexed " + filename);
-            } catch (IOException e) {
-                System.err.println("Error indexing file: " + e.getMessage());
+            if (!directory.isDirectory()) {
+                System.err.println("Error: 'filesToIndex' exists but is not a directory");
+                return;
             }
+
+            System.out.println("Starting to index directory: " + directory.getAbsolutePath());
+            indexer.indexDirectory(directory);
+            System.out.println("Successfully indexed all files in directory");
+            
         } catch (Exception e) {
-            System.err.println("Error initializing indexer: " + e.getMessage());
+            System.err.println("Error during indexing: " + e.getMessage());
             e.printStackTrace();
+        } finally {
+            if (searcher != null) {
+                try {
+                    searcher.close();
+                } catch (Exception e) {
+                    System.err.println("Error closing searcher: " + e.getMessage());
+                }
+            }
         }
     }
 }
