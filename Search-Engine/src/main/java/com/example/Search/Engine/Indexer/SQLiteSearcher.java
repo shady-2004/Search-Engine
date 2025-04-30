@@ -289,14 +289,19 @@ public class SQLiteSearcher implements AutoCloseable {
         try (PreparedStatement pstmt = connection.prepareStatement(updateIDF)) {
             pstmt.setInt(1, totalDocs);
             
-            for (long startId = minId; startId <= maxId; startId += BATCH_SIZE) {
-                long endId = Math.min(startId + BATCH_SIZE - 1, maxId);
-                pstmt.setLong(2, startId);
-                pstmt.setLong(3, endId);
-                
-                int updated = pstmt.executeUpdate();
-                System.out.println("Updated IDF for " + updated + " records (IDs " + startId + " to " + endId + ")");
+            try {
+                for (long startId = minId; startId <= maxId; startId += BATCH_SIZE) {
+                    long endId = Math.min(startId + BATCH_SIZE - 1, maxId);
+                    pstmt.setLong(2, startId);
+                    pstmt.setLong(3, endId);
+                    
+                    int updated = pstmt.executeUpdate();
+                    System.out.println("Updated IDF for " + updated + " records (IDs " + startId + " to " + endId + ")");
+                }
                 connection.commit();
+            } catch (SQLException e) {
+                System.err.println("Error during batch processing: " + e.getMessage());
+                throw e; // Re-throw the exception to ensure proper error handling
             }
         }
 
