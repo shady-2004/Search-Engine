@@ -149,21 +149,15 @@ public class Indexer implements AutoCloseable {
             .toList();
         long tokenizationEnd = System.nanoTime();
 
-        // Second pass: bulk write to database
-        System.out.println("\nWriting " + results.size() + " documents to database...");
+        // Bulk write to database
+        System.out.println("\nWriting " + results.size() + " documents to database in bulk...");
         long dbStart = System.nanoTime();
-        for (Map.Entry<String, Map<String, Tokenizer.Token>> entry : results) {
-            long docStart = System.nanoTime();
-            try {
-                searcher.addDocument(entry.getKey(), entry.getKey(), entry.getValue());
-                long docEnd = System.nanoTime();
-                System.out.printf("Document %s indexed in %.2f ms%n", 
-                    entry.getKey(), (docEnd - docStart) / 1_000_000.0);
-            } catch (Exception e) {
-                String error = String.format("Error indexing %s: %s", entry.getKey(), e.getMessage());
-                System.err.println(error);
-                errors.add(error);
-            }
+        try {
+            searcher.addDocuments(results);
+        } catch (Exception e) {
+            String error = String.format("Error during bulk indexing: %s", e.getMessage());
+            System.err.println(error);
+            errors.add(error);
         }
         long dbEnd = System.nanoTime();
 

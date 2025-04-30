@@ -31,11 +31,13 @@ public class Tokenizer {
         private final String word;
         private double count;
         private String position;
+        private final List<Integer> positions;
 
         public Token(String word, double count, String position) {
             this.word = word;
             this.count = count;
             this.position = position;
+            this.positions = new ArrayList<>();
         }
 
         public String getWord() {
@@ -58,6 +60,14 @@ public class Tokenizer {
             this.position = position;
         }
 
+        public List<Integer> getPositions() {
+            return positions;
+        }
+
+        public void addPosition(int position) {
+            positions.add(position);
+        }
+
         @Override
         public boolean equals(Object o) {
             if (this == o) return true;
@@ -65,12 +75,13 @@ public class Tokenizer {
             Token token = (Token) o;
             return Double.compare(token.count, count) == 0 &&
                 Objects.equals(word, token.word) &&
-                Objects.equals(position, token.position);
+                Objects.equals(position, token.position) &&
+                Objects.equals(positions, token.positions);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(word, count, position);
+            return Objects.hash(word, count, position, positions);
         }
 
         @Override
@@ -79,6 +90,7 @@ public class Tokenizer {
                 "word='" + word + '\'' +
                 ", count=" + count +
                 ", position='" + position + '\'' +
+                ", positions=" + positions +
                 '}';
         }
     }
@@ -136,34 +148,55 @@ public class Tokenizer {
         // Process title with highest weight
         CompletableFuture<Void> titleFuture = CompletableFuture.runAsync(() -> {
             String title = doc.title();
-            processText(title, tokens, "title");
-            totalTokens.addAndGet(countTokens(title));
+            if (title != null && !title.isEmpty()) {
+                System.out.println("Processing title: " + title);
+                processText(title, tokens, "title");
+                totalTokens.addAndGet(countTokens(title));
+            }
         });
 
         // Process headings in parallel
         CompletableFuture<Void> h1Future = CompletableFuture.runAsync(() -> {
             Elements h1s = doc.select("h1");
-            h1s.parallelStream().forEach(h1 -> {
-                processText(h1.text(), tokens, "h1");
-                totalTokens.addAndGet(countTokens(h1.text()));
-            });
+            if (!h1s.isEmpty()) {
+                System.out.println("Processing " + h1s.size() + " h1 elements");
+                h1s.parallelStream().forEach(h1 -> {
+                    String text = h1.text();
+                    if (!text.isEmpty()) {
+                        processText(text, tokens, "h1");
+                        totalTokens.addAndGet(countTokens(text));
+                    }
+                });
+            }
         });
 
         CompletableFuture<Void> h2Future = CompletableFuture.runAsync(() -> {
             Elements h2s = doc.select("h2");
-            h2s.parallelStream().forEach(h2 -> {
-                processText(h2.text(), tokens, "h2");
-                totalTokens.addAndGet(countTokens(h2.text()));
-            });
+            if (!h2s.isEmpty()) {
+                System.out.println("Processing " + h2s.size() + " h2 elements");
+                h2s.parallelStream().forEach(h2 -> {
+                    String text = h2.text();
+                    if (!text.isEmpty()) {
+                        processText(text, tokens, "h2");
+                        totalTokens.addAndGet(countTokens(text));
+                    }
+                });
+            }
         });
 
         // Process regular content in parallel
         CompletableFuture<Void> contentFuture = CompletableFuture.runAsync(() -> {
             Elements paragraphs = doc.select("p");
-            paragraphs.parallelStream().forEach(p -> {
-                processText(p.text(), tokens, "content");
-                totalTokens.addAndGet(countTokens(p.text()));
-            });
+            if (!paragraphs.isEmpty()) {
+                System.out.println("Processing " + paragraphs.size() + " paragraphs");
+                paragraphs.parallelStream().forEach(p -> {
+                    String text = p.text();
+                    if (!text.isEmpty()) {
+                        processText(text, tokens, "content");
+                        totalTokens.addAndGet(countTokens(text));
+                    }
+                });
+            }
         });
 
         // Wait for all processing to complete
@@ -176,24 +209,36 @@ public class Tokenizer {
                 token.setCount(token.getCount() / finalTotalTokens));
         }
 
-        System.out.println("Processed document with " + finalTotalTokens + " total tokens");
+        System.out.println("Processed document with " + finalTotalTokens + " total tokens and " + 
+            tokens.size() + " unique tokens");
         return new HashMap<>(tokens);
     }
 
     private void processText(String text, ConcurrentHashMap<String, Token> tokens, String position) {
-        tokenizeString(text, true).parallelStream().forEach(word -> {
+        List<String> words = tokenizeString(text, true);
+        if (words.isEmpty()) {
+            System.out.println("Warning: No valid words found in text for position: " + position);
+            return;
+        }
+        
+        for (int i = 0; i < words.size(); i++) {
+            final int positionIndex = i;
+            String word = words.get(i);
             tokens.compute(word, (key, existingToken) -> {
                 if (existingToken == null) {
-                    return new Token(word, 1.0, position);
+                    Token newToken = new Token(word, 1.0, position);
+                    newToken.addPosition(positionIndex);
+                    return newToken;
                 } else {
                     existingToken.setCount(existingToken.getCount() + 1.0);
+                    existingToken.addPosition(positionIndex);
                     if (getPositionWeight(position) > getPositionWeight(existingToken.getPosition())) {
                         existingToken.setPosition(position);
                     }
                     return existingToken;
                 }
             });
-        });
+        }
     }
 
     private int countTokens(String text) {
