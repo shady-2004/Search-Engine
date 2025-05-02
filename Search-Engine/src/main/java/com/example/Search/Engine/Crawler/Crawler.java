@@ -21,9 +21,9 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
-
 public class Crawler {
     private static final int MAX_PAGES = 500;
+    private static final int MAX_PAGES_PER_DOMAIN = 5;
     private static final int CHECKPOINT_INTERVAL = 20;
     private static final int MAX_QUEUE_SIZE = 10000;
     private static final String[] USER_AGENTS = {
@@ -31,14 +31,15 @@ public class Crawler {
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) Gecko/20100101 Firefox/130.0"
     };
-    private static final String URLS_FILE_NAME = "src/main/resources/urls.txt"; // Change this as needed
+    private static final String URLS_FILE_NAME = "src/main/resources/urls.txt";
     private final Map<String, BaseRobotRules> robotsCache = new HashMap<>();
+    private final ConcurrentHashMap<String, AtomicInteger> domainPageCounts = new ConcurrentHashMap<>();
 
-    private final Queue<String> urlQueue = new ConcurrentLinkedQueue<>();       //list of URLs to be visited
+    private final Queue<String> urlQueue = new ConcurrentLinkedQueue<>();
     private final Set<String> visitedUrls = ConcurrentHashMap.newKeySet();
     private final Set<String> queuedUrls = ConcurrentHashMap.newKeySet();
     private final AtomicInteger totalCrawledPages = new AtomicInteger(0);
-    private final AtomicInteger pendingPages = new AtomicInteger(0); // Being processed
+    private final AtomicInteger pendingPages = new AtomicInteger(0);
     private final AtomicInteger activeThreads = new AtomicInteger(0);
     private static final String DB_URL = "jdbc:sqlite:data/search_index.db";
     private static final ReentrantLock dbLock = new ReentrantLock();
@@ -49,7 +50,7 @@ public class Crawler {
             System.err.println("Number of threads not provided");
             System.exit(1);
         }
-        int numThreads = 1;         // just for initialization
+        int numThreads = 1;
         try {
             numThreads = Integer.parseInt(args[0]);
             if (numThreads < 1) {
@@ -67,12 +68,7 @@ public class Crawler {
 
         Thread[] threads = new Thread[numThreads];
         for (int i = 0; i < numThreads; i++) {
-            threads[i] = new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    myCrawler.crawl();
-                }
-            });
+            threads[i] = new Thread(() -> myCrawler.crawl());
             threads[i].start();
         }
         for (Thread thread : threads) {
@@ -95,7 +91,6 @@ public class Crawler {
         initializeUrlQueue();
     }
 
-
     public void crawl() {
         activeThreads.incrementAndGet();
         Queue<String> tempQueuedUrls = new LinkedList<>();
@@ -113,7 +108,7 @@ public class Crawler {
                 String normalizedUrlStr = urlQueue.poll();
                 if (normalizedUrlStr == null) {
                     if (urlQueue.isEmpty() && activeThreads.get() <= 1) {
-                        break; // No URLs and no active threads
+                        break;
                     }
                     pendingPages.decrementAndGet();
                     Thread.sleep(10);
@@ -121,12 +116,18 @@ public class Crawler {
                 }
 
                 if (!visitedUrls.add(normalizedUrlStr)) {
-                    // Already visited
                     System.err.println(Thread.currentThread().getName() + " - Skipping " + normalizedUrlStr + ": Already visited");
                     pendingPages.decrementAndGet();
                     continue;
                 }
 
+                // Check domain limit after marking as visited
+                String domain = getDomain(normalizedUrlStr);
+                AtomicInteger domainCount = domainPageCounts.computeIfAbsent(domain, k -> new AtomicInteger(0));
+                if (domainCount.get() >= MAX_PAGES_PER_DOMAIN) {
+                    pendingPages.decrementAndGet();
+                    continue;
+                }
 
                 Document doc = fetchHtmlDocument(normalizedUrlStr);
                 if (doc == null) {
@@ -135,11 +136,11 @@ public class Crawler {
                     continue;
                 }
 
-
+                // Increment domain page count
+                domainCount.incrementAndGet();
                 queuedUrls.remove(normalizedUrlStr);
-                // Successfully downloaded the html file
                 System.out.println(Thread.currentThread().getName() + " - Successfully downloaded " + normalizedUrlStr);
-                // Add data to temporary buffers
+
                 tempCrawledUrlsBuffer.add(normalizedUrlStr);
                 tempHtmlDocsBuffer.add(doc.html());
                 tempHtmlTitlesBuffer.add(doc.title());
@@ -152,10 +153,12 @@ public class Crawler {
                     if (normalizedHyperLink == null) {
                         continue;
                     }
-                    if (visitedUrls.contains(normalizedHyperLink)) {
+                    String linkDomain = getDomain(normalizedHyperLink);
+                    AtomicInteger linkDomainCount = domainPageCounts.computeIfAbsent(linkDomain, k -> new AtomicInteger(0));
+                    if (linkDomainCount.get() >= MAX_PAGES_PER_DOMAIN) {
                         continue;
                     }
-                    if (queuedUrls.contains(normalizedHyperLink)) {
+                    if (visitedUrls.contains(normalizedHyperLink) || queuedUrls.contains(normalizedHyperLink)) {
                         continue;
                     }
                     if (urlQueue.size() < MAX_QUEUE_SIZE) {
@@ -169,7 +172,6 @@ public class Crawler {
                     System.out.println(Thread.currentThread().getName() + " - Checkpoint: " + tempHtmlDocsBuffer.size() + " documents to save");
                     saveDataAtCheckpoint(tempQueuedUrls, tempCrawledUrlsBuffer, tempHtmlDocsBuffer, tempHtmlTitlesBuffer, tempTimeStampsBuffer, tempListOfExtractedHyperLinksBuffer);
                 }
-
             }
         } catch (Exception e) {
             System.err.println(Thread.currentThread().getName() + " - Exception: " + e.getMessage());
@@ -180,7 +182,6 @@ public class Crawler {
                 saveDataAtCheckpoint(tempQueuedUrls, tempCrawledUrlsBuffer, tempHtmlDocsBuffer, tempHtmlTitlesBuffer, tempTimeStampsBuffer, tempListOfExtractedHyperLinksBuffer);
             }
         }
-
     }
 
     private void writeUrlsToFile(Queue<String> tempUrls) {
@@ -203,8 +204,7 @@ public class Crawler {
         if (tempHtmlDocsBuffer.size() != tempCrawledUrlsBuffer.size() ||
                 tempHtmlDocsBuffer.size() != tempTimeStampsBuffer.size() ||
                 tempHtmlDocsBuffer.size() != tempListOfExtractedHyperLinksBuffer.size()) {
-            System.err.println(Thread.currentThread().getName() +
-                    " - Buffer sizes do not match");
+            System.err.println(Thread.currentThread().getName() + " - Buffer sizes do not match");
             throw new IllegalArgumentException("Buffer sizes do not match");
         }
         dbLock.lock();
@@ -283,20 +283,14 @@ public class Crawler {
 
     void saveDataAtCheckpoint(Queue<String> tempUrls, List<String> tempCrawledUrlsBuffer,
                               List<String> tempHtmlDocsBuffer, List<String> tempHtmlTitles, List<String> tempTimeStampsBuffer, List<HashSet<String>> tempListOfExtractedHyperLinksBuffer) {
-        // Save data to disk
-        // 1- Write URLs to file
         if (!tempUrls.isEmpty()) {
             writeUrlsToFile(tempUrls);
         }
-
-        // 2- Write to database
         if (!tempCrawledUrlsBuffer.isEmpty()) {
             int rowsInserted = insertIntoDB(tempCrawledUrlsBuffer, tempHtmlDocsBuffer, tempHtmlTitles, tempTimeStampsBuffer, tempListOfExtractedHyperLinksBuffer);
             totalCrawledPages.addAndGet(rowsInserted);
             pendingPages.addAndGet(-rowsInserted);
         }
-
-        // Clear temporary buffers
         tempCrawledUrlsBuffer.clear();
         tempHtmlDocsBuffer.clear();
         tempTimeStampsBuffer.clear();
@@ -309,6 +303,8 @@ public class Crawler {
              ResultSet rs = stmt.executeQuery("SELECT url FROM DocumentMetaData")) {
             while (rs.next()) {
                 visitedUrls.add(rs.getString("url"));
+                String domain = getDomain(rs.getString("url"));
+                domainPageCounts.computeIfAbsent(domain, k -> new AtomicInteger(0)).incrementAndGet();
             }
         } catch (SQLException e) {
             System.err.println("Failed to read urls: " + e.getMessage());
@@ -317,7 +313,6 @@ public class Crawler {
 
     private void initializeUrlQueue() {
         try (BufferedReader urlsReader = new BufferedReader(new FileReader(URLS_FILE_NAME))) {
-            // Load remaining URLs into urlQueue
             String urlStr;
             while ((urlStr = urlsReader.readLine()) != null) {
                 if (urlStr.trim().isEmpty() || !urlStr.matches("^https?://.*")) {
@@ -325,6 +320,12 @@ public class Crawler {
                 }
                 String normalizedUrlStr = normalizeURL(urlStr);
                 if (normalizedUrlStr == null) {
+                    continue;
+                }
+                String domain = getDomain(normalizedUrlStr);
+                AtomicInteger domainCount = domainPageCounts.computeIfAbsent(domain, k -> new AtomicInteger(0));
+                if (domainCount.get() >= MAX_PAGES_PER_DOMAIN) {
+                    visitedUrls.add(normalizedUrlStr);
                     continue;
                 }
                 if (visitedUrls.contains(normalizedUrlStr) || queuedUrls.contains(normalizedUrlStr)) {
@@ -337,7 +338,6 @@ public class Crawler {
             System.err.println("Error opening file: " + URLS_FILE_NAME + " " + e.getMessage());
         }
     }
-
 
     int getRowCount() {
         try (java.sql.Connection conn = DriverManager.getConnection(DB_URL);
@@ -371,6 +371,7 @@ public class Crawler {
                     "extracted_link TEXT NOT NULL, " +
                     "FOREIGN KEY (doc_id) REFERENCES DocumentMetaData(doc_id) ON DELETE CASCADE)");
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_doc_id ON extracted_links(doc_id)");
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_url ON DocumentMetaData(url)");
         } catch (SQLException e) {
             System.err.println("Failed to initialize database: " + e.getMessage());
         }
@@ -413,7 +414,6 @@ public class Crawler {
             URL url = new URL(urlStr);
             String host = url.getProtocol() + "://" + url.getHost();
 
-            // Use cached rules if available
             if (robotsCache.containsKey(host)) {
                 BaseRobotRules rules = robotsCache.get(host);
                 return rules.isAllowed(urlStr);
@@ -433,7 +433,6 @@ public class Crawler {
                 return rules.isAllowed(urlStr);
             }
         } catch (IOException e) {
-            // If robots.txt is not available or something goes wrong, allow by default
             return true;
         }
     }
@@ -453,7 +452,11 @@ public class Crawler {
     public String normalizeURL(String urlString) {
         try {
             URI uri = new URI(urlString).normalize();
-            String host = uri.getHost().toLowerCase();
+            String host = uri.getHost();
+            if (host == null){
+                return null;
+            }
+            host = host.toLowerCase();
             String scheme = uri.getScheme().toLowerCase();
             int port = uri.getPort();
             String path = uri.getPath().replaceAll("/+$", "");
@@ -484,5 +487,16 @@ public class Crawler {
             }
         }
         return String.join("&", validParams);
+    }
+
+    private String getDomain(String url) {
+        try {
+            URI uri = new URI(url);
+            String host = uri.getHost();
+            return host != null ? host.toLowerCase() : "";
+        } catch (URISyntaxException e) {
+            System.err.println(Thread.currentThread().getName() + " - Error extracting domain from URL: " + url);
+            return "";
+        }
     }
 }
