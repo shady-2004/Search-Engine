@@ -24,6 +24,8 @@ import java.util.concurrent.locks.ReentrantLock;
 
 public class Crawler {
     private static final int MAX_PAGES = 500;
+    private static final int MAX_PAGES_PER_DOMAIN = 5;
+
     private static final int CHECKPOINT_INTERVAL = 20;
     private static final int MAX_QUEUE_SIZE = 10000;
     private static final String[] USER_AGENTS = {
@@ -33,6 +35,7 @@ public class Crawler {
     };
     private static final String URLS_FILE_NAME = "src/main/resources/urls.txt"; // Change this as needed
     private final Map<String, BaseRobotRules> robotsCache = new HashMap<>();
+    private final ConcurrentHashMap<String, AtomicInteger> domainPageCounts = new ConcurrentHashMap<>(); // New: Track pages per domain
 
     private final Queue<String> urlQueue = new ConcurrentLinkedQueue<>();       //list of URLs to be visited
     private final Set<String> visitedUrls = ConcurrentHashMap.newKeySet();
@@ -135,6 +138,10 @@ public class Crawler {
                     continue;
                 }
 
+                synchronized (this) {
+                    String domain = getDomain(normalizedUrlStr);
+                    domainPageCounts.computeIfAbsent(domain, k -> new AtomicInteger(0)).incrementAndGet();
+                }
 
                 queuedUrls.remove(normalizedUrlStr);
                 // Successfully downloaded the html file
@@ -152,10 +159,12 @@ public class Crawler {
                     if (normalizedHyperLink == null) {
                         continue;
                     }
-                    if (visitedUrls.contains(normalizedHyperLink)) {
+                    String linkDomain = getDomain(normalizedHyperLink);
+                    AtomicInteger domainCount = domainPageCounts.getOrDefault(linkDomain, new AtomicInteger(0));
+                    if (domainCount.get() >= MAX_PAGES_PER_DOMAIN) {
                         continue;
                     }
-                    if (queuedUrls.contains(normalizedHyperLink)) {
+                    if (visitedUrls.contains(normalizedHyperLink) || queuedUrls.contains(normalizedHyperLink)) {
                         continue;
                     }
                     if (urlQueue.size() < MAX_QUEUE_SIZE) {
@@ -181,6 +190,17 @@ public class Crawler {
             }
         }
 
+    }
+
+    private String getDomain(String url) {
+        try {
+            URI uri = new URI(url);
+            String host = uri.getHost();
+            return host != null ? host.toLowerCase() : "";
+        } catch (URISyntaxException e) {
+            System.err.println(Thread.currentThread().getName() + " - Error extracting domain from URL: " + url);
+            return "";
+        }
     }
 
     private void writeUrlsToFile(Queue<String> tempUrls) {
@@ -309,6 +329,8 @@ public class Crawler {
              ResultSet rs = stmt.executeQuery("SELECT url FROM DocumentMetaData")) {
             while (rs.next()) {
                 visitedUrls.add(rs.getString("url"));
+                String domain = getDomain(rs.getString("url"));
+                domainPageCounts.computeIfAbsent(domain, k -> new AtomicInteger(0)).incrementAndGet();
             }
         } catch (SQLException e) {
             System.err.println("Failed to read urls: " + e.getMessage());
@@ -325,6 +347,11 @@ public class Crawler {
                 }
                 String normalizedUrlStr = normalizeURL(urlStr);
                 if (normalizedUrlStr == null) {
+                    continue;
+                }
+                String domain = getDomain(normalizedUrlStr);
+                AtomicInteger domainCount = domainPageCounts.getOrDefault(domain, new AtomicInteger(0));
+                if (domainCount.get() >= MAX_PAGES_PER_DOMAIN) {
                     continue;
                 }
                 if (visitedUrls.contains(normalizedUrlStr) || queuedUrls.contains(normalizedUrlStr)) {
