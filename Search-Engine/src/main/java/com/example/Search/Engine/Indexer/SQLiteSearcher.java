@@ -47,10 +47,10 @@ public class SQLiteSearcher implements AutoCloseable {
     }
 
     public SQLiteSearcher() throws SQLException {
-        String projectRoot = System.getProperty("user.dir");
-        String dbPath = projectRoot + "/search_index.db";
+        //String projectRoot = System.getProperty("user.dir");
+        String dbPath = "jdbc:sqlite:data/search_index.db";
         
-        connection = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+        connection = DriverManager.getConnection(dbPath);
         connection.setAutoCommit(false);
         initializeDatabase();
         System.out.println("Connected to database: " + dbPath);

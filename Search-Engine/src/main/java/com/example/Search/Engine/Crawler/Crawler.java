@@ -27,7 +27,7 @@ public class Crawler {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) Gecko/20100101 Firefox/130.0"
     };
     private static final String DEFAULT_USER_AGENT = "MyCrawler"; // Change this as needed
-    private static final String URLS_FILE_NAME = "src/main/resources/urls.txt"; // Change this as needed
+    private static final String URLS_FILE_NAME = "Search-Engine/src/main/resources/urls.txt"; // Change this as needed
 //    private final Map<String, BaseRobotRules> robotsCache = new HashMap<>();
 
     private final Queue<String> urlQueue = new ConcurrentLinkedQueue<>();       //list of URLs to be visited
@@ -36,7 +36,7 @@ public class Crawler {
     private final AtomicInteger totalCrawledPages = new AtomicInteger(0);
     private final AtomicInteger pendingPages = new AtomicInteger(0); // Being processed
     private final AtomicInteger activeThreads = new AtomicInteger(0);
-    private static final String DB_URL = "jdbc:sqlite:crawler.db";
+    private static final String DB_URL = "jdbc:sqlite:data/search_index.db";
     private static final ReentrantLock dbLock = new ReentrantLock();
     private static final ReentrantLock fileLock = new ReentrantLock();
 
@@ -207,7 +207,7 @@ public class Crawler {
             conn.setAutoCommit(false);
             List<Long> docIds = new ArrayList<>();
             try (PreparedStatement stmt = conn.prepareStatement(
-                    "INSERT INTO crawled_pages (url, html, crawled_time) VALUES (?, ?, ?)",
+                    "INSERT INTO DocumentMetaData (url, html, last_crawled_date) VALUES (?, ?, ?)",
                     Statement.RETURN_GENERATED_KEYS)) {
                 for (int i = 0; i < tempHtmlDocsBuffer.size(); i++) {
                     stmt.setString(1, tempCrawledUrlsBuffer.get(i));
@@ -298,7 +298,7 @@ public class Crawler {
     private void initializeVisitedUrls() {
         try (java.sql.Connection conn = DriverManager.getConnection(DB_URL);
              Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery("SELECT url FROM crawled_pages")) {
+             ResultSet rs = stmt.executeQuery("SELECT url FROM DocumentMetaData")) {
             while (rs.next()) {
                 visitedUrls.add(rs.getString("url"));
             }
@@ -334,7 +334,7 @@ public class Crawler {
     int getRowCount() {
         try (java.sql.Connection conn = DriverManager.getConnection(DB_URL);
              Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery("SELECT COUNT(*) AS count FROM crawled_pages")) {
+             ResultSet rs = stmt.executeQuery("SELECT COUNT(*) AS count FROM DocumentMetaData")) {
             if (rs.next()) {
                 int count = rs.getInt("count");
                 System.out.println("Row count: " + count);
@@ -349,15 +349,19 @@ public class Crawler {
     private void initializeDatabase() {
         try (java.sql.Connection conn = DriverManager.getConnection(DB_URL);
              Statement stmt = conn.createStatement()) {
-            stmt.execute("CREATE TABLE IF NOT EXISTS crawled_pages (" +
-                    "doc_id INTEGER PRIMARY KEY AUTOINCREMENT, " +
-                    "url TEXT NOT NULL, " +
-                    "html TEXT NOT NULL, " +
-                    "crawled_time TEXT NOT NULL)");
+            stmt.execute("""
+            CREATE TABLE IF NOT EXISTS DocumentMetaData (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT NOT NULL,
+                title TEXT,
+                last_crawled_date TEXT DEFAULT CURRENT_TIMESTAMP,
+                html TEXT
+            )
+            """);
             stmt.execute("CREATE TABLE IF NOT EXISTS extracted_links (" +
                     "doc_id INTEGER NOT NULL, " +
                     "extracted_link TEXT NOT NULL, " +
-                    "FOREIGN KEY (doc_id) REFERENCES crawled_pages(doc_id) ON DELETE CASCADE)");
+                    "FOREIGN KEY (doc_id) REFERENCES DocumentMetaData(doc_id) ON DELETE CASCADE)");
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_doc_id ON extracted_links(doc_id)");
         } catch (SQLException e) {
             System.err.println("Failed to initialize database: " + e.getMessage());

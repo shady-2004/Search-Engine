@@ -7,7 +7,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
+import java.util.HashSet;
+import org.springframework.stereotype.Service;
 
+@Service
 public class PS {
     private static final TokenizerME tokenizer;
 
@@ -27,7 +31,7 @@ public class PS {
         }
     }
 
-    public static void main(String[] args) {
+    public void main(String[] args) {
         String[] documents = {
                 "traveling is fun is one of the most exciting activities for people who love adventure.",
                 "The traveler was tired after a long day of sightseeing. Despite the exhaustion, the experience of traveling was worth every moment.",
@@ -48,65 +52,57 @@ public class PS {
         processQuery(documents, query4);
     }
 
-    private static void processQuery(String[] documents, String query) {
+    private void processQuery(String[] documents, String query) {
         System.out.println("\nProcessing Query: " + query);
         List<Integer> results = search(documents, query);
         printResults(documents, results);
     }
 
-    private static List<Integer> search(String[] documents, String query) {
-        List<Integer> matchingDocuments = new ArrayList<>();
-
+    public List<Integer> search(String[] documents, String query) {
         String[] parts = splitQuery(query);
-        if (parts == null || parts.length == 0) {
-            System.out.println("Invalid query syntax.");
+        String operator = detectOperator(query);
+        boolean isPhrase = isMultiWordPhrase(query);
+
+        if (parts.length == 1) {
+            return searchSinglePhrase(documents, query, isPhrase);
+        }
+
+        List<Integer> leftResults = searchSinglePhrase(documents, parts[0], isMultiWordPhrase(parts[0]));
+        List<Integer> rightResults = searchSinglePhrase(documents, parts[1], isMultiWordPhrase(parts[1]));
+
+        return switch (operator) {
+            case "OR" -> {
+                Set<Integer> combined = new HashSet<>(leftResults);
+                combined.addAll(rightResults);
+                yield new ArrayList<>(combined);
+            }
+            case "AND" -> {
+                Set<Integer> leftSet = new HashSet<>(leftResults);
+                leftSet.retainAll(rightResults);
+                yield new ArrayList<>(leftSet);
+            }
+            case "NOT" -> {
+                Set<Integer> leftSet = new HashSet<>(leftResults);
+                leftSet.removeAll(rightResults);
+                yield new ArrayList<>(leftSet);
+            }
+            default -> Collections.emptyList();
+        };
+    }
+
+    private List<Integer> searchSinglePhrase(String[] documents, String query, boolean isPhrase) {
+        List<Integer> matchingDocuments = new ArrayList<>();
+        if (query == null || query.isEmpty()) {
             return matchingDocuments;
         }
 
-        String operator = detectOperator(query);
-
-        if (operator.isEmpty()) {
-            return searchSinglePhrase(documents, parts[0], isMultiWordPhrase(parts[0]));
-        }
-
-        List<Integer> results1 = searchSinglePhrase(documents, parts[0], isMultiWordPhrase(parts[0]));
-        List<Integer> results2 = searchSinglePhrase(documents, parts[1], isMultiWordPhrase(parts[1]));
-
-        switch (operator.toUpperCase()) {
-            case "OR":
-                matchingDocuments.addAll(results1);
-                for (int doc : results2) {
-                    if (!matchingDocuments.contains(doc)) {
-                        matchingDocuments.add(doc);
-                    }
-                }
-                break;
-
-            case "AND":
-                matchingDocuments.addAll(results1);
-                matchingDocuments.retainAll(results2);
-                break;
-
-            case "NOT":
-                matchingDocuments.addAll(results1);
-                matchingDocuments.removeAll(results2);
-                break;
-
-            default:
-                System.out.println("Unexpected operator.");
-                break;
-        }
-
-        Collections.sort(matchingDocuments);
-        return matchingDocuments;
-    }
-
-    private static List<Integer> searchSinglePhrase(String[] documents, String query, boolean isPhrase) {
-        List<Integer> matchingDocuments = new ArrayList<>();
         String[] queryTokens = preprocessQuery(query);
         String searchPhrase = String.join(" ", queryTokens).toLowerCase();
 
         for (int i = 0; i < documents.length; i++) {
+            if (documents[i] == null) {
+                continue;
+            }
             String[] docTokens = tokenizer.tokenize(documents[i]);
             String docText = String.join(" ", docTokens).toLowerCase();
 
@@ -125,7 +121,7 @@ public class PS {
         return matchingDocuments;
     }
 
-    private static String[] splitQuery(String query) {
+    private String[] splitQuery(String query) {
         query = query.trim();
         if (query.contains(" OR ")) return query.split(" OR ", 2);
         if (query.contains(" AND ")) return query.split(" AND ", 2);
@@ -133,23 +129,23 @@ public class PS {
         return new String[]{query};
     }
 
-    private static String detectOperator(String query) {
+    private String detectOperator(String query) {
         if (query.contains(" OR ")) return "OR";
         if (query.contains(" AND ")) return "AND";
         if (query.contains(" NOT ")) return "NOT";
         return "";
     }
 
-    private static boolean isMultiWordPhrase(String query) {
+    private boolean isMultiWordPhrase(String query) {
         return query.startsWith("\"") && query.endsWith("\"") && query.contains(" ");
     }
 
-    private static String[] preprocessQuery(String query) {
+    private String[] preprocessQuery(String query) {
         query = query.replaceAll("^\"|\"$", "").trim();
         return tokenizer.tokenize(query);
     }
 
-    private static void printResults(String[] documents, List<Integer> results) {
+    private void printResults(String[] documents, List<Integer> results) {
         if (results.isEmpty()) {
             System.out.println("No matching documents found.");
         } else {

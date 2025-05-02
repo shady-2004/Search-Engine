@@ -9,7 +9,9 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import org.springframework.stereotype.Service;
 
+@Service
 public class QP {
     private static TokenizerME tokenizer;
 
@@ -29,7 +31,7 @@ public class QP {
         }
     }
 
-    public static void main(String[] args) {
+    public void main(String[] args) {
         String[] documents = {
                 "Traveling is one of the most exciting activities for people who love adventure. Travelers often explore new places and cultures, making their journeys unforgettable.",
                 "The traveler was tired after a long day of sightseeing. Despite the exhaustion, the experience of traveling was worth every moment.",
@@ -48,7 +50,7 @@ public class QP {
         }
     }
 
-    private static Set<String> tokenizeAndStem(String text) {
+    public Set<String> tokenizeAndStem(String text) {
         String[] tokens = tokenizer.tokenize(text.toLowerCase());
         Set<String> stems = new HashSet<>();
         Stemmer stemmer = new Stemmer();
@@ -64,7 +66,12 @@ public class QP {
         return stems;
     }
 
-    private static List<Integer> searchInDocument(String[] documents, Set<String> queryStems) {
+    public List<Integer> search(String[] documents, String query) {
+        Set<String> queryStems = tokenizeAndStem(query);
+        return searchInDocument(documents, queryStems);
+    }
+
+    private List<Integer> searchInDocument(String[] documents, Set<String> queryStems) {
         List<Integer> relevantDocuments = new ArrayList<>();
 
         for (int i = 0; i < documents.length; i++) {
