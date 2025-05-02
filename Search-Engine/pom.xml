@@ -45,8 +45,26 @@
 			<artifactId>opennlp-tools</artifactId>
 			<version>2.3.2</version> <!-- Check for the latest version on Maven Central -->
 		</dependency>
-
-
+    
+    <!-- Jsoup HTML Parser -->
+    <dependency>
+      <groupId>org.jsoup</groupId>
+      <artifactId>jsoup</artifactId>
+      <version>1.17.2</version>
+    </dependency>
+    
+    <!-- HikariCP Connection Pool -->
+    <dependency>
+        <groupId>com.zaxxer</groupId>
+        <artifactId>HikariCP</artifactId>
+        <version>5.1.0</version>
+    </dependency>
+    
+    <!-- Spring Boot Starter -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter</artifactId>
+    </dependency>
 
 		<dependency>
 			<groupId>org.openjfx</groupId>
@@ -76,6 +94,15 @@
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
 			</plugin>
+      
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.1.1</version>
+        <configuration>
+            <mainClass>com.example.Search.Engine.SearchEngineApplication</mainClass>
+        </configuration>
+      </plugin>
 		</plugins>
 	</build>
 
