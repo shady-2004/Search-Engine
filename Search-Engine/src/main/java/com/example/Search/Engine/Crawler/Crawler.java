@@ -1,13 +1,18 @@
 package com.example.Search.Engine.Crawler;
 
+import crawlercommons.robots.BaseRobotRules;
+import crawlercommons.robots.SimpleRobotRulesParser;
 import org.jsoup.Connection;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
+
 import java.io.*;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.URL;
+import java.net.URLConnection;
 import java.sql.*;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -18,7 +23,7 @@ import java.util.concurrent.locks.ReentrantLock;
 
 
 public class Crawler {
-    private static final int MAX_PAGES = 200;
+    private static final int MAX_PAGES = 500;
     private static final int CHECKPOINT_INTERVAL = 20;
     private static final int MAX_QUEUE_SIZE = 10000;
     private static final String[] USER_AGENTS = {
@@ -26,9 +31,8 @@ public class Crawler {
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) Gecko/20100101 Firefox/130.0"
     };
-    private static final String DEFAULT_USER_AGENT = "MyCrawler"; // Change this as needed
-    private static final String URLS_FILE_NAME = "Search-Engine/src/main/resources/urls.txt"; // Change this as needed
-//    private final Map<String, BaseRobotRules> robotsCache = new HashMap<>();
+    private static final String URLS_FILE_NAME = "src/main/resources/urls.txt"; // Change this as needed
+    private final Map<String, BaseRobotRules> robotsCache = new HashMap<>();
 
     private final Queue<String> urlQueue = new ConcurrentLinkedQueue<>();       //list of URLs to be visited
     private final Set<String> visitedUrls = ConcurrentHashMap.newKeySet();
@@ -97,6 +101,7 @@ public class Crawler {
         Queue<String> tempQueuedUrls = new LinkedList<>();
         List<String> tempCrawledUrlsBuffer = new ArrayList<>();
         List<String> tempHtmlDocsBuffer = new ArrayList<>();
+        List<String> tempHtmlTitlesBuffer = new ArrayList<>();
         List<String> tempTimeStampsBuffer = new ArrayList<>();
         List<HashSet<String>> tempListOfExtractedHyperLinksBuffer = new ArrayList<>();
         try {
@@ -130,12 +135,14 @@ public class Crawler {
                     continue;
                 }
 
+
                 queuedUrls.remove(normalizedUrlStr);
                 // Successfully downloaded the html file
                 System.out.println(Thread.currentThread().getName() + " - Successfully downloaded " + normalizedUrlStr);
                 // Add data to temporary buffers
                 tempCrawledUrlsBuffer.add(normalizedUrlStr);
                 tempHtmlDocsBuffer.add(doc.html());
+                tempHtmlTitlesBuffer.add(doc.title());
                 tempTimeStampsBuffer.add(LocalDateTime.now().toString());
                 HashSet<String> hyperLinks = extractLinks(doc);
                 tempListOfExtractedHyperLinksBuffer.add(hyperLinks);
@@ -160,17 +167,17 @@ public class Crawler {
 
                 if (tempHtmlDocsBuffer.size() >= CHECKPOINT_INTERVAL || totalCrawledPages.get() + pendingPages.get() >= MAX_PAGES) {
                     System.out.println(Thread.currentThread().getName() + " - Checkpoint: " + tempHtmlDocsBuffer.size() + " documents to save");
-                    saveDataAtCheckpoint(tempQueuedUrls, tempCrawledUrlsBuffer, tempHtmlDocsBuffer, tempTimeStampsBuffer, tempListOfExtractedHyperLinksBuffer);
+                    saveDataAtCheckpoint(tempQueuedUrls, tempCrawledUrlsBuffer, tempHtmlDocsBuffer, tempHtmlTitlesBuffer, tempTimeStampsBuffer, tempListOfExtractedHyperLinksBuffer);
                 }
 
             }
-        }catch (Exception e) {
+        } catch (Exception e) {
             System.err.println(Thread.currentThread().getName() + " - Exception: " + e.getMessage());
         } finally {
             activeThreads.decrementAndGet();
             if (!tempCrawledUrlsBuffer.isEmpty()) {
                 System.out.println(Thread.currentThread().getName() + " - Final save: " + tempCrawledUrlsBuffer.size() + " documents to save");
-                saveDataAtCheckpoint(tempQueuedUrls, tempCrawledUrlsBuffer, tempHtmlDocsBuffer, tempTimeStampsBuffer, tempListOfExtractedHyperLinksBuffer);
+                saveDataAtCheckpoint(tempQueuedUrls, tempCrawledUrlsBuffer, tempHtmlDocsBuffer, tempHtmlTitlesBuffer, tempTimeStampsBuffer, tempListOfExtractedHyperLinksBuffer);
             }
         }
 
@@ -191,7 +198,7 @@ public class Crawler {
         }
     }
 
-    private int insertIntoDB(List<String> tempCrawledUrlsBuffer, List<String> tempHtmlDocsBuffer,
+    private int insertIntoDB(List<String> tempCrawledUrlsBuffer, List<String> tempHtmlDocsBuffer, List<String> tempHtmlTitlesBuffer,
                              List<String> tempTimeStampsBuffer, List<HashSet<String>> tempListOfExtractedHyperLinksBuffer) {
         if (tempHtmlDocsBuffer.size() != tempCrawledUrlsBuffer.size() ||
                 tempHtmlDocsBuffer.size() != tempTimeStampsBuffer.size() ||
@@ -207,12 +214,13 @@ public class Crawler {
             conn.setAutoCommit(false);
             List<Long> docIds = new ArrayList<>();
             try (PreparedStatement stmt = conn.prepareStatement(
-                    "INSERT INTO DocumentMetaData (url, html, last_crawled_date) VALUES (?, ?, ?)",
+                    "INSERT INTO DocumentMetaData (url, title, html, last_crawled_date) VALUES (?, ?, ?, ?)",
                     Statement.RETURN_GENERATED_KEYS)) {
                 for (int i = 0; i < tempHtmlDocsBuffer.size(); i++) {
                     stmt.setString(1, tempCrawledUrlsBuffer.get(i));
-                    stmt.setString(2, tempHtmlDocsBuffer.get(i));
-                    stmt.setString(3, tempTimeStampsBuffer.get(i));
+                    stmt.setString(2, tempHtmlTitlesBuffer.get(i));
+                    stmt.setString(3, tempHtmlDocsBuffer.get(i));
+                    stmt.setString(4, tempTimeStampsBuffer.get(i));
                     stmt.executeUpdate();
                     ResultSet rs = stmt.getGeneratedKeys();
                     if (rs.next()) {
@@ -274,7 +282,7 @@ public class Crawler {
     }
 
     void saveDataAtCheckpoint(Queue<String> tempUrls, List<String> tempCrawledUrlsBuffer,
-                              List<String> tempHtmlDocsBuffer, List<String> tempTimeStampsBuffer, List<HashSet<String>> tempListOfExtractedHyperLinksBuffer) {
+                              List<String> tempHtmlDocsBuffer, List<String> tempHtmlTitles, List<String> tempTimeStampsBuffer, List<HashSet<String>> tempListOfExtractedHyperLinksBuffer) {
         // Save data to disk
         // 1- Write URLs to file
         if (!tempUrls.isEmpty()) {
@@ -283,7 +291,7 @@ public class Crawler {
 
         // 2- Write to database
         if (!tempCrawledUrlsBuffer.isEmpty()) {
-            int rowsInserted = insertIntoDB(tempCrawledUrlsBuffer, tempHtmlDocsBuffer, tempTimeStampsBuffer, tempListOfExtractedHyperLinksBuffer);
+            int rowsInserted = insertIntoDB(tempCrawledUrlsBuffer, tempHtmlDocsBuffer, tempHtmlTitles, tempTimeStampsBuffer, tempListOfExtractedHyperLinksBuffer);
             totalCrawledPages.addAndGet(rowsInserted);
             pendingPages.addAndGet(-rowsInserted);
         }
@@ -350,14 +358,14 @@ public class Crawler {
         try (java.sql.Connection conn = DriverManager.getConnection(DB_URL);
              Statement stmt = conn.createStatement()) {
             stmt.execute("""
-            CREATE TABLE IF NOT EXISTS DocumentMetaData (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                url TEXT NOT NULL,
-                title TEXT,
-                last_crawled_date TEXT DEFAULT CURRENT_TIMESTAMP,
-                html TEXT
-            )
-            """);
+                    CREATE TABLE IF NOT EXISTS DocumentMetaData (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        url TEXT NOT NULL,
+                        title TEXT,
+                        html TEXT,
+                        last_crawled_date TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """);
             stmt.execute("CREATE TABLE IF NOT EXISTS extracted_links (" +
                     "doc_id INTEGER NOT NULL, " +
                     "extracted_link TEXT NOT NULL, " +
@@ -369,11 +377,11 @@ public class Crawler {
     }
 
     private Document fetchHtmlDocument(String url) {
-//        if (!isAllowedByRobots(url)) {
-//            System.err.println(LocalDateTime.now() + ": Thread " + Thread.currentThread().getName() +
-//                    " - Skipping " + url + ": Disallowed by robots.txt");
-//            return null;
-//        }
+        if (!isAllowedByRobots(url)) {
+            System.err.println(LocalDateTime.now() + ": Thread " + Thread.currentThread().getName() +
+                    " - Skipping " + url + ": Disallowed by robots.txt");
+            return null;
+        }
 
         try {
             Connection.Response response = Jsoup.connect(url)
@@ -400,35 +408,35 @@ public class Crawler {
         }
     }
 
-//    private boolean isAllowedByRobots(String urlStr) {
-//        try {
-//            URL url = new URL(urlStr);
-//            String host = url.getProtocol() + "://" + url.getHost();
-//
-//            // Use cached rules if available
-//            if (robotsCache.containsKey(host)) {
-//                BaseRobotRules rules = robotsCache.get(host);
-//                return rules.isAllowed(urlStr);
-//            }
-//
-//            URL robotsTxtUrl = new URL(host + "/robots.txt");
-//            URLConnection connection = robotsTxtUrl.openConnection();
-//            connection.setRequestProperty("User-Agent", DEFAULT_USER_AGENT);
-//            connection.setConnectTimeout(3000);
-//            connection.setReadTimeout(3000);
-//
-//            try (InputStream inputStream = connection.getInputStream()) {
-//                byte[] robotsTxtContent = inputStream.readAllBytes();
-//                SimpleRobotRulesParser parser = new SimpleRobotRulesParser();
-//                BaseRobotRules rules = parser.parseContent(robotsTxtUrl.toString(), robotsTxtContent, "text/plain", DEFAULT_USER_AGENT);
-//                robotsCache.put(host, rules);
-//                return rules.isAllowed(urlStr);
-//            }
-//        } catch (IOException e) {
-//            // If robots.txt is not available or something goes wrong, allow by default
-//            return true;
-//        }
-//    }
+    private boolean isAllowedByRobots(String urlStr) {
+        try {
+            URL url = new URL(urlStr);
+            String host = url.getProtocol() + "://" + url.getHost();
+
+            // Use cached rules if available
+            if (robotsCache.containsKey(host)) {
+                BaseRobotRules rules = robotsCache.get(host);
+                return rules.isAllowed(urlStr);
+            }
+
+            URL robotsTxtUrl = new URL(host + "/robots.txt");
+            URLConnection connection = robotsTxtUrl.openConnection();
+            connection.setRequestProperty("User-Agent", USER_AGENTS[new Random().nextInt(USER_AGENTS.length)]);
+            connection.setConnectTimeout(3000);
+            connection.setReadTimeout(3000);
+
+            try (InputStream inputStream = connection.getInputStream()) {
+                byte[] robotsTxtContent = inputStream.readAllBytes();
+                SimpleRobotRulesParser parser = new SimpleRobotRulesParser();
+                BaseRobotRules rules = parser.parseContent(robotsTxtUrl.toString(), robotsTxtContent, "text/plain", USER_AGENTS[new Random().nextInt(USER_AGENTS.length)]);
+                robotsCache.put(host, rules);
+                return rules.isAllowed(urlStr);
+            }
+        } catch (IOException e) {
+            // If robots.txt is not available or something goes wrong, allow by default
+            return true;
+        }
+    }
 
     public HashSet<String> extractLinks(Document doc) {
         HashSet<String> links = new HashSet<>();

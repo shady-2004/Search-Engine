@@ -71,6 +71,13 @@
 			<artifactId>spring-boot-starter-test</artifactId>
 			<scope>test</scope>
 		</dependency>
+
+		<dependency>
+			<groupId>com.github.crawler-commons</groupId>
+			<artifactId>crawler-commons</artifactId>
+			<version>1.2</version>
+		</dependency>
+
 	</dependencies>
 
 	<build>
