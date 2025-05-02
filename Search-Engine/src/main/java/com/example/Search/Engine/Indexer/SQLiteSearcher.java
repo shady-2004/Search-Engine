@@ -2,6 +2,7 @@ package com.example.Search.Engine.Indexer;
 
 import java.sql.*;
 import java.util.*;
+import java.util.concurrent.*;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -12,6 +13,9 @@ public class SQLiteSearcher implements AutoCloseable {
     private static final double H1_WEIGHT = 2.0;
     private static final double H2_WEIGHT = 1.5;
     private static final double CONTENT_WEIGHT = 1.0;
+
+    private final ThreadLocal<Connection> threadLocalConnection = new ThreadLocal<>();
+    private final Object connectionLock = new Object();
 
     public static class SearchResult {
         private final String url;
@@ -47,10 +51,10 @@ public class SQLiteSearcher implements AutoCloseable {
     }
 
     public SQLiteSearcher() throws SQLException {
-        String projectRoot = System.getProperty("user.dir");
-        String dbPath = projectRoot + "/search_index.db";
+        //String projectRoot = System.getProperty("user.dir");
+        String dbPath = "jdbc:sqlite:data/search_index.db";
         
-        connection = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+        connection = DriverManager.getConnection(dbPath);
         connection.setAutoCommit(false);
         initializeDatabase();
         System.out.println("Connected to database: " + dbPath);
@@ -112,40 +116,65 @@ public class SQLiteSearcher implements AutoCloseable {
     public void addDocuments(List<Map.Entry<String, Map<String, Tokenizer.Token>>> documents) {
         try {
             // First, get or create document IDs
-            Map<String, Long> urlToDocId = new HashMap<>();
+            Map<String, Long> urlToDocId = new ConcurrentHashMap<>();
             String getDocId = "SELECT id FROM DocumentMetaData WHERE url = ?";
             String insertDoc = "INSERT INTO DocumentMetaData (url, title) VALUES (?, ?)";
             
-            try (PreparedStatement getStmt = connection.prepareStatement(getDocId);
-                 PreparedStatement insertStmt = connection.prepareStatement(insertDoc, Statement.RETURN_GENERATED_KEYS)) {
-                
-                for (Map.Entry<String, Map<String, Tokenizer.Token>> doc : documents) {
-                    String url = doc.getKey();
-                    
-                    // First try to get existing document ID
-                    getStmt.setString(1, url);
-                    try (ResultSet rs = getStmt.executeQuery()) {
-                        if (rs.next()) {
-                            // Document exists, get its ID
-                            long docId = rs.getLong(1);
-                            urlToDocId.put(url, docId);
-                            System.out.println("Found existing document ID " + docId + " for URL: " + url);
-                        } else {
-                            // Document doesn't exist, insert it
-                            insertStmt.setString(1, url);
-                            insertStmt.setString(2, url); // Using URL as title for now
-                            insertStmt.executeUpdate();
+            // Process documents in parallel to get/create IDs
+            int processors = Runtime.getRuntime().availableProcessors();
+            ExecutorService executor = Executors.newFixedThreadPool(processors);
+            List<CompletableFuture<Void>> idFutures = new ArrayList<>();
+            
+            for (Map.Entry<String, Map<String, Tokenizer.Token>> doc : documents) {
+                CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+                    try {
+                        String url = doc.getKey();
+                        try (PreparedStatement getStmt = getThreadConnection().prepareStatement(getDocId);
+                             PreparedStatement insertStmt = getThreadConnection().prepareStatement(insertDoc, Statement.RETURN_GENERATED_KEYS)) {
                             
-                            try (ResultSet generatedKeys = insertStmt.getGeneratedKeys()) {
-                                if (generatedKeys.next()) {
-                                    long docId = generatedKeys.getLong(1);
+                            // First try to get existing document ID
+                            getStmt.setString(1, url);
+                            try (ResultSet rs = getStmt.executeQuery()) {
+                                if (rs.next()) {
+                                    // Document exists, get its ID
+                                    long docId = rs.getLong(1);
                                     urlToDocId.put(url, docId);
-                                    System.out.println("Created new document ID " + docId + " for URL: " + url);
+                                    System.out.println("Found existing document ID " + docId + " for URL: " + url);
+                                } else {
+                                    // Document doesn't exist, insert it
+                                    insertStmt.setString(1, url);
+                                    insertStmt.setString(2, url); // Using URL as title for now
+                                    insertStmt.executeUpdate();
+                                    
+                                    try (ResultSet generatedKeys = insertStmt.getGeneratedKeys()) {
+                                        if (generatedKeys.next()) {
+                                            long docId = generatedKeys.getLong(1);
+                                            urlToDocId.put(url, docId);
+                                            System.out.println("Created new document ID " + docId + " for URL: " + url);
+                                        }
+                                    }
                                 }
                             }
+                            getThreadConnection().commit();
                         }
+                    } catch (SQLException e) {
+                        throw new RuntimeException("Error processing document ID: " + e.getMessage(), e);
                     }
+                }, executor);
+                idFutures.add(future);
+            }
+            
+            // Wait for all ID processing to complete
+            CompletableFuture.allOf(idFutures.toArray(new CompletableFuture[0])).join();
+            executor.shutdown();
+            try {
+                if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+                    executor.shutdownNow();
                 }
+            } catch (InterruptedException e) {
+                executor.shutdownNow();
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("Interrupted while waiting for document ID processing", e);
             }
 
             // Verify all documents have IDs
@@ -173,7 +202,7 @@ public class SQLiteSearcher implements AutoCloseable {
             """;
             
             int insertedTokens = 0;
-            try (PreparedStatement pstmt = connection.prepareStatement(insertToken)) {
+            try (PreparedStatement pstmt = getThreadConnection().prepareStatement(insertToken)) {
                 for (Map.Entry<String, Map<String, Tokenizer.Token>> doc : documents) {
                     Long docId = urlToDocId.get(doc.getKey());
                     
@@ -190,7 +219,7 @@ public class SQLiteSearcher implements AutoCloseable {
                 // Execute the batch and commit
                 int[] results = pstmt.executeBatch();
                 System.out.println("Executed batch of " + results.length + " tokens (expected: " + insertedTokens + ")");
-                connection.commit();
+                getThreadConnection().commit();
             }
 
             // Insert word positions in bulk
@@ -200,7 +229,7 @@ public class SQLiteSearcher implements AutoCloseable {
             """;
             
             int totalPositions = 0;
-            try (PreparedStatement pstmt = connection.prepareStatement(insertPosition)) {
+            try (PreparedStatement pstmt = getThreadConnection().prepareStatement(insertPosition)) {
                 for (Map.Entry<String, Map<String, Tokenizer.Token>> doc : documents) {
                     Long docId = urlToDocId.get(doc.getKey());
                     
@@ -217,17 +246,17 @@ public class SQLiteSearcher implements AutoCloseable {
                 // Execute the batch and commit
                 int[] results = pstmt.executeBatch();
                 System.out.println("Executed batch of " + results.length + " positions (expected: " + totalPositions + ")");
-                connection.commit();
+                getThreadConnection().commit();
             }
 
             // Update IDF values once for all documents
             updateIDF();
-            connection.commit();
+            getThreadConnection().commit();
             System.out.println("Successfully added " + documents.size() + " documents in bulk");
             
         } catch (SQLException e) {
             try {
-                connection.rollback();
+                getThreadConnection().rollback();
             } catch (SQLException rollbackError) {
                 System.err.println("Error during rollback: " + rollbackError.getMessage());
             }
@@ -236,7 +265,7 @@ public class SQLiteSearcher implements AutoCloseable {
         }
     }
 
-    private void updateIDF() throws SQLException {
+    public void updateIDF() throws SQLException {
         System.out.println("Starting IDF update...");
         
         // First, get total number of documents
@@ -249,85 +278,57 @@ public class SQLiteSearcher implements AutoCloseable {
             System.out.println("Total documents: " + totalDocs);
         }
 
-        // Create a temporary table to store word frequencies
-        try (PreparedStatement pstmt = connection.prepareStatement("""
-                CREATE TEMPORARY TABLE IF NOT EXISTS WordFrequencies AS
-                SELECT word, COUNT(DISTINCT doc_id) as doc_count
-                FROM InvertedIndex
-                GROUP BY word
-                HAVING doc_count < ?  -- Filter out words that appear in all documents
-            """)) {
-            pstmt.setInt(1, totalDocs);
-            pstmt.execute();
-            System.out.println("Created temporary table for word frequencies");
-        }
+        // Get all unique words and their document counts in a single query
+        String getWordCounts = """
+            SELECT word, COUNT(DISTINCT doc_id) as doc_count
+            FROM InvertedIndex
+            GROUP BY word
+        """;
 
         // Update IDF values in batches
         String updateIDF = """
             UPDATE InvertedIndex
-            SET IDF = (
-                SELECT -LOG(doc_count * 1.0 / ?)
-                FROM WordFrequencies
-                WHERE WordFrequencies.word = InvertedIndex.word
-            )
-            WHERE id BETWEEN ? AND ?
+            SET IDF = -LOG(? * 1.0 / ?)
+            WHERE word = ?
         """;
 
-        // Get the range of IDs to process
-        String getRange = "SELECT MIN(id), MAX(id) FROM InvertedIndex";
-        long minId, maxId;
         try (Statement stmt = connection.createStatement();
-            ResultSet rs = stmt.executeQuery(getRange)) {
-            rs.next();
-            minId = rs.getLong(1);
-            maxId = rs.getLong(2);
-            System.out.println("Processing InvertedIndex IDs from " + minId + " to " + maxId);
-        }
-
-        // Process in larger batches
-        final int BATCH_SIZE = 500000;
-        try (PreparedStatement pstmt = connection.prepareStatement(updateIDF)) {
-            pstmt.setInt(1, totalDocs);
+             ResultSet rs = stmt.executeQuery(getWordCounts);
+             PreparedStatement updateStmt = connection.prepareStatement(updateIDF)) {
             
-            try {
-                for (long startId = minId; startId <= maxId; startId += BATCH_SIZE) {
-                    long endId = Math.min(startId + BATCH_SIZE - 1, maxId);
-                    pstmt.setLong(2, startId);
-                    pstmt.setLong(3, endId);
-                    
-                    int updated = pstmt.executeUpdate();
-                    System.out.println("Updated IDF for " + updated + " records (IDs " + startId + " to " + endId + ")");
+            int batchSize = 1000; // Process 1000 words at a time
+            int count = 0;
+            int totalUpdated = 0;
+            
+            while (rs.next()) {
+                String word = rs.getString("word");
+                int docCount = rs.getInt("doc_count");
+                
+                updateStmt.setInt(1, docCount);
+                updateStmt.setInt(2, totalDocs);
+                updateStmt.setString(3, word);
+                updateStmt.addBatch();
+                count++;
+                
+                if (count % batchSize == 0) {
+                    int[] results = updateStmt.executeBatch();
+                    totalUpdated += results.length;
+                    connection.commit();
+                    System.out.println("Updated " + totalUpdated + " words so far...");
                 }
-                connection.commit();
-            } catch (SQLException e) {
-                System.err.println("Error during batch processing: " + e.getMessage());
-                throw e; // Re-throw the exception to ensure proper error handling
             }
+            
+            // Process remaining batch
+            if (count % batchSize != 0) {
+                int[] results = updateStmt.executeBatch();
+                totalUpdated += results.length;
+                connection.commit();
+            }
+            
+            System.out.println("Updated IDF for " + totalUpdated + " words in total");
         }
 
-        // Set IDF to 0 for words that appear in all documents
-        try (PreparedStatement pstmt = connection.prepareStatement("""
-                UPDATE InvertedIndex
-                SET IDF = 0
-                WHERE word IN (
-                    SELECT word
-                    FROM InvertedIndex
-                    GROUP BY word
-                    HAVING COUNT(DISTINCT doc_id) = ?
-                )
-            """)) {
-            pstmt.setInt(1, totalDocs);
-            int removed = pstmt.executeUpdate();
-            System.out.println("Set IDF to 0 for " + removed + " words that appear in all documents");
-            connection.commit();
-        }
-
-        // Clean up temporary table
-        try (Statement stmt = connection.createStatement()) {
-            stmt.execute("DROP TABLE IF EXISTS WordFrequencies");
-        }
-        
-        System.out.println("IDF update completed");
+        System.out.println("IDF update completed successfully");
     }
 
     public List<SearchResult> search(String query, Tokenizer tokenizer) {
@@ -390,15 +391,49 @@ public class SQLiteSearcher implements AutoCloseable {
         };
     }
 
+    public Connection getConnection() {
+        return connection;
+    }
+
+    private Connection getThreadConnection() throws SQLException {
+        Connection conn = threadLocalConnection.get();
+        if (conn == null || conn.isClosed()) {
+            synchronized (connectionLock) {
+                conn = DriverManager.getConnection("jdbc:sqlite:data/search_index.db");
+                conn.setAutoCommit(false);
+                threadLocalConnection.set(conn);
+            }
+        }
+        return conn;
+    }
+
+    public List<Map.Entry<String, String>> getAllDocuments() throws SQLException {
+        String sql = "SELECT id, url, title, html FROM DocumentMetaData";
+        List<Map.Entry<String, String>> results = new ArrayList<>();
+        
+        try (Statement stmt = getThreadConnection().createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            
+            while (rs.next()) {
+                String url = rs.getString("url");
+                String html = rs.getString("html");
+                results.add(Map.entry(url, html));
+            }
+        }
+        
+        return results;
+    }
+
     @Override
     public void close() {
-        if (connection != null) {
-            try {
-                connection.close();
-                System.out.println("Database connection closed");
-            } catch (SQLException e) {
-                System.err.println("Error closing database connection: " + e.getMessage());
+        try {
+            Connection conn = threadLocalConnection.get();
+            if (conn != null && !conn.isClosed()) {
+                conn.close();
+                threadLocalConnection.remove();
             }
+        } catch (SQLException e) {
+            System.err.println("Error closing connection: " + e.getMessage());
         }
     }
 } 

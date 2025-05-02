@@ -11,6 +11,7 @@ import org.springframework.core.io.ClassPathResource;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import com.example.Search.Engine.QP.Stemmer;
 
 //Component responsible for tokenizing text and HTML documents.
 //Handles stopword removal, word validation, and position-based weighting.
@@ -20,6 +21,7 @@ public class Tokenizer {
     private final Pattern wordPattern;
     private static final int MIN_WORD_LENGTH = 2;
     private static final int MAX_WORD_LENGTH = 45;
+    //private final Stemmer stemmer;
     
     // Position weights
     public static final double TITLE_WEIGHT = 3.0;
@@ -98,6 +100,7 @@ public class Tokenizer {
     public Tokenizer() {
         this.stopWords = new HashSet<>();
         this.wordPattern = Pattern.compile("\\b[\\w']+\\b");
+        //this.stemmer = new Stemmer();
         loadStopWords();
     }
 
@@ -128,7 +131,11 @@ public class Tokenizer {
         while (matcher.find()) {
             String word = matcher.group();
             if (isValidWord(word, removeStopWords)) {
-                tokens.add(word);
+                // Create a new Stemmer instance for each word
+                Stemmer stemmer = new Stemmer();
+                stemmer.add(word.toCharArray(), word.length());
+                stemmer.stem();
+                tokens.add(stemmer.toString());
             }
         }
         return tokens;

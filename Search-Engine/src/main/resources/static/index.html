@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Search Engine</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .search-container {
+            margin-bottom: 20px;
+        }
+        .search-input {
+            width: 100%;
+            padding: 10px;
+            font-size: 16px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .search-button {
+            padding: 10px 20px;
+            font-size: 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        .search-button:hover {
+            background-color: #45a049;
+        }
+        .results-container {
+            margin-top: 20px;
+        }
+        .result-item {
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+        .result-title {
+            font-size: 18px;
+            font-weight: bold;
+            color: #1a0dab;
+            text-decoration: none;
+        }
+        .result-url {
+            color: #006621;
+            font-size: 14px;
+        }
+        .result-score {
+            color: #666;
+            font-size: 12px;
+        }
+        .pagination {
+            display: flex;
+            justify-content: center;
+            margin-top: 20px;
+            gap: 10px;
+        }
+        .pagination button {
+            padding: 5px 10px;
+            border: 1px solid #ddd;
+            background-color: white;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        .pagination button:hover {
+            background-color: #f0f0f0;
+        }
+        .pagination button:disabled {
+            background-color: #f0f0f0;
+            cursor: not-allowed;
+        }
+        .pagination-info {
+            text-align: center;
+            margin-top: 10px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="search-container">
+        <input type="text" id="searchInput" class="search-input" placeholder="Enter your search query...">
+        <button onclick="performSearch()" class="search-button">Search</button>
+    </div>
+    <div id="results" class="results-container"></div>
+    <div class="pagination">
+        <button id="prevPage" onclick="changePage(-1)">Previous</button>
+        <button id="nextPage" onclick="changePage(1)">Next</button>
+    </div>
+    <div id="paginationInfo" class="pagination-info"></div>
+
+    <script>
+        let currentPage = 0;
+        let totalResults = 0;
+        let currentQuery = '';
+
+        function performSearch() {
+            currentPage = 0;
+            currentQuery = document.getElementById('searchInput').value;
+            if (!currentQuery.trim()) return;
+            fetchResults();
+        }
+
+        function changePage(delta) {
+            currentPage += delta;
+            if (currentPage < 0) currentPage = 0;
+            fetchResults();
+        }
+
+        function fetchResults() {
+            fetch(`/api/search?query=${encodeURIComponent(currentQuery)}&page=${currentPage}&size=10`)
+                .then(response => response.json())
+                .then(data => {
+                    displayResults(data);
+                    updatePaginationControls(data.totalCount);
+                })
+                .catch(error => console.error('Error:', error));
+        }
+
+        function displayResults(data) {
+            const resultsContainer = document.getElementById('results');
+            resultsContainer.innerHTML = '';
+
+            if (data.results.length === 0) {
+                resultsContainer.innerHTML = '<p>No results found.</p>';
+                return;
+            }
+
+            data.results.forEach(result => {
+                const resultElement = document.createElement('div');
+                resultElement.className = 'result-item';
+                resultElement.innerHTML = `
+                    <a href="${result.url}" class="result-title">${result.title}</a>
+                    <div class="result-url">${result.url}</div>
+                    <div class="result-score">Relevance score: ${result.score}</div>
+                `;
+                resultsContainer.appendChild(resultElement);
+            });
+        }
+
+        function updatePaginationControls(total) {
+            totalResults = total;
+            const prevButton = document.getElementById('prevPage');
+            const nextButton = document.getElementById('nextPage');
+            const paginationInfo = document.getElementById('paginationInfo');
+
+            prevButton.disabled = currentPage === 0;
+            nextButton.disabled = (currentPage + 1) * 10 >= totalResults;
+
+            const start = currentPage * 10 + 1;
+            const end = Math.min((currentPage + 1) * 10, totalResults);
+            paginationInfo.textContent = `Showing results ${start}-${end} of ${totalResults}`;
+        }
+
+        // Allow search on Enter key
+        document.getElementById('searchInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                performSearch();
+            }
+        });
+    </script>
+</body>
+</html> 

@@ -7,6 +7,9 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import static java.lang.Math.log;
 
+import org.springframework.stereotype.Service;
+
+@Service
 public class Ranker {
     static final int threads = 10;
     static final double TFIDF_WEIGHT = 0.7;
