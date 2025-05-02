@@ -12,6 +12,9 @@ import java.util.concurrent.TimeUnit;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.core.io.ClassPathResource;
+import java.sql.Connection;
+import java.sql.Statement;
+import java.sql.ResultSet;
 
 @Service
 public class Indexer implements AutoCloseable {
@@ -154,6 +157,10 @@ public class Indexer implements AutoCloseable {
         long dbStart = System.nanoTime();
         try {
             searcher.addDocuments(results);
+            
+            // Update IDF values after adding all documents
+            System.out.println("\nUpdating IDF values...");
+            searcher.updateIDF();
         } catch (Exception e) {
             String error = String.format("Error during bulk indexing: %s", e.getMessage());
             System.err.println(error);
@@ -211,6 +218,105 @@ public class Indexer implements AutoCloseable {
         }
     }
 
+    public void index() {
+        long startTime = System.nanoTime();
+        Runtime runtime = Runtime.getRuntime();
+        long initialMemory = runtime.totalMemory() - runtime.freeMemory();
+
+        System.out.println("\nStarting to index documents from database...");
+        List<String> errors = Collections.synchronizedList(new ArrayList<>());
+
+        try {
+            // Get all documents from DocumentMetaData
+            List<Map.Entry<String, String>> documents = searcher.getAllDocuments();
+            System.out.println("Found " + documents.size() + " documents to index");
+
+            // Create a thread pool for parallel processing
+            int processors = Runtime.getRuntime().availableProcessors();
+            ExecutorService executor = Executors.newFixedThreadPool(processors);
+            List<CompletableFuture<Map.Entry<String, Map<String, Tokenizer.Token>>>> futures = new ArrayList<>();
+
+            // First pass: collect all documents and tokens in parallel
+            long tokenizationStart = System.nanoTime();
+            for (Map.Entry<String, String> doc : documents) {
+                CompletableFuture<Map.Entry<String, Map<String, Tokenizer.Token>>> future = CompletableFuture.supplyAsync(() -> {
+                    long docStart = System.nanoTime();
+                    try {
+                        System.out.println("\n=== Processing document: " + doc.getKey() + " ===");
+                        String url = doc.getKey();
+                        String html = doc.getValue();
+                        Document docHtml = Jsoup.parse(html);
+                        Map<String, Tokenizer.Token> tokens = tokenizer.tokenizeDocument(docHtml);
+                        long docEnd = System.nanoTime();
+                        System.out.printf("Document %s processed in %.2f ms%n", 
+                            url, (docEnd - docStart) / 1_000_000.0);
+                        return Map.entry(url, tokens);
+                    } catch (Exception e) {
+                        String error = String.format("Error processing %s: %s", doc.getKey(), e.getMessage());
+                        System.err.println(error);
+                        errors.add(error);
+                        return null;
+                    }
+                }, executor);
+                futures.add(future);
+            }
+
+            // Wait for all processing to complete
+            List<Map.Entry<String, Map<String, Tokenizer.Token>>> results = futures.stream()
+                .map(CompletableFuture::join)
+                .filter(Objects::nonNull)
+                .toList();
+            long tokenizationEnd = System.nanoTime();
+
+            // Bulk write to database
+            System.out.println("\nWriting " + results.size() + " documents to database in bulk...");
+            long dbStart = System.nanoTime();
+            try {
+                searcher.addDocuments(results);
+            } catch (Exception e) {
+                String error = String.format("Error during bulk indexing: %s", e.getMessage());
+                System.err.println(error);
+                errors.add(error);
+            }
+            long dbEnd = System.nanoTime();
+
+            executor.shutdown();
+            try {
+                if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+                    executor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                executor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+
+            // Print performance metrics
+            long endTime = System.nanoTime();
+            long finalMemory = runtime.totalMemory() - runtime.freeMemory();
+            
+            System.out.println("\n=== Performance Metrics ===");
+            System.out.printf("Total indexing time: %.2f seconds%n", (endTime - startTime) / 1_000_000_000.0);
+            System.out.printf("Tokenization time: %.2f seconds%n", (tokenizationEnd - tokenizationStart) / 1_000_000_000.0);
+            System.out.printf("Database time: %.2f seconds%n", (dbEnd - dbStart) / 1_000_000_000.0);
+            System.out.printf("Average time per document: %.2f ms%n", 
+                (endTime - startTime) / (results.size() * 1_000_000.0));
+            System.out.printf("Memory used: %.2f MB%n", (finalMemory - initialMemory) / (1024.0 * 1024.0));
+            System.out.println("=========================");
+
+            if (!errors.isEmpty()) {
+                System.err.println("\nErrors occurred while indexing:");
+                errors.forEach(System.err::println);
+                throw new IOException("Errors occurred while indexing:\n" + String.join("\n", errors));
+            }
+            
+            System.out.println("\nSuccessfully indexed all documents from database");
+
+        } catch (Exception e) {
+            System.err.println("Error during indexing: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
     public static void main(String[] args) {
         SQLiteSearcher searcher = null;
         try {
@@ -218,27 +324,9 @@ public class Indexer implements AutoCloseable {
             Tokenizer tokenizer = new Tokenizer();
             Indexer indexer = new Indexer(searcher, tokenizer);
             
-            // Get the current working directory
-            String currentDir = System.getProperty("user.dir");
-            System.out.println("Current working directory: " + currentDir);
-            
-            // Create path to the filesToIndex directory
-            File directory = new File(currentDir, "Search-Engine/src/main/resources/filesToIndex");
-            System.out.println("Looking for directory at: " + directory.getAbsolutePath());
-            
-            if (!directory.exists()) {
-                System.err.println("Error: Directory 'filesToIndex' not found. Please create it in: " + currentDir);
-                return;
-            }
-            
-            if (!directory.isDirectory()) {
-                System.err.println("Error: 'filesToIndex' exists but is not a directory");
-                return;
-            }
-
-            System.out.println("Starting to index directory: " + directory.getAbsolutePath());
-            indexer.indexDirectory(directory);
-            System.out.println("Successfully indexed all files in directory");
+            System.out.println("Starting to index documents from database...");
+            indexer.index();
+            System.out.println("Successfully indexed all documents from database");
             
         } catch (Exception e) {
             System.err.println("Error during indexing: " + e.getMessage());
