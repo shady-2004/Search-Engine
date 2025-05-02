@@ -1,15 +1,20 @@
 package com.example.Search.Engine.Ranker;
 
+import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+
+import static com.example.Search.Engine.Data.DataBaseManager.getGraphFromDB;
 
 public class PageRank {
 
     private static final double damping = 0.85;
     private static final double epsilon = 0.00001;
 
-    public static Map<Integer, Double> pageRank() {
-        Map<Integer, Map<Integer, Integer>> nodeAdjMap = TestDataPageRank.getGraph();
+    public static Map<Integer, Double> pageRank() throws SQLException {
+        Map<Integer, List< Integer>> nodeAdjMap = getGraphFromDB();
         int n = nodeAdjMap.size();
 
         // Initialize probability map with 1/N for each node
@@ -27,17 +32,17 @@ public class PageRank {
         return probability;
     }
 
-    private static void rank(Map<Integer, Map<Integer, Integer>> nodeAdjMap, Map<Integer, Double> probability) {
+    private static void rank(Map<Integer, List<Integer>> nodeAdjMap, Map<Integer, Double> probability) {
         boolean exit = false;
         while (!exit) {
-            exit=true;
+            exit = true;
 
             Map<Integer, Double> newProbability = new HashMap<>();
             double dangling = 0.0;
 
             // Calculate dangling contribution
             for (Integer node : nodeAdjMap.keySet()) {
-                Map<Integer, Integer> edges = nodeAdjMap.getOrDefault(node, new HashMap<>());
+                List<Integer> edges = nodeAdjMap.getOrDefault(node, new ArrayList<>());
                 if (edges.isEmpty()) {
                     dangling += probability.getOrDefault(node, 0.0);
                 }
@@ -49,9 +54,10 @@ public class PageRank {
             for (Integer i : nodeAdjMap.keySet()) {
                 double rank = (1 - damping) / totalNodes;
 
+                // Loop through all other nodes to find which ones link to node 'i'
                 for (Integer j : nodeAdjMap.keySet()) {
-                    Map<Integer, Integer> edges = nodeAdjMap.getOrDefault(j, new HashMap<>());
-                    if (edges.containsKey(i)) {
+                    List<Integer> edges = nodeAdjMap.getOrDefault(j, new ArrayList<>());
+                    if (edges.contains(i)) {
                         rank += damping * probability.getOrDefault(j, 0.0) / edges.size();
                     }
                 }
@@ -72,7 +78,7 @@ public class PageRank {
 
             // Print for debugging
             System.out.println(newProbability);
-
         }
     }
+
 }

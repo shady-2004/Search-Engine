@@ -4,10 +4,12 @@ import javafx.util.Pair;
 
 import java.sql.*;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.Duration;
+import java.util.Map;
 
 public class DataBaseManager {
     private static final String URL = "jdbc:sqlite:./data/searchE.db";
@@ -32,4 +34,49 @@ public class DataBaseManager {
         }
         return queries;
     }
+
+
+    public static Map<Integer, List<Integer>> getGraphFromDB() throws SQLException {
+        Map<Integer, List<Integer>> graph = new HashMap<>();
+
+        String nodesSql = "SELECT id FROM nodes";
+        try (Connection conn = getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(nodesSql)) {
+
+            while (rs.next()) {
+                int nodeId = rs.getInt("id");
+                graph.putIfAbsent(nodeId, new ArrayList<>());
+            }
+        }
+
+        String linksSql = "SELECT from_id, to_id FROM links";
+        try (Connection conn = getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(linksSql)) {
+
+            while (rs.next()) {
+                int from = rs.getInt("from_id");
+                int to = rs.getInt("to_id");
+
+
+                if (graph.containsKey(from)) {
+                    graph.get(from).add(to);
+                } else {
+                    graph.put(from, new ArrayList<>());
+                    graph.get(from).add(to);
+                }
+
+            }
+        }
+
+        // Optionally, print the graph for debugging purposes
+        System.out.println("Graph: " + graph);
+
+        return graph;
+    }
+
+
+
+
 }
