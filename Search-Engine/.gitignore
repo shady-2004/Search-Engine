@@ -5,7 +5,7 @@ target/
 !**/src/test/**/target/
 
 ### STS ###
-urls.txt
+data/
 .apt_generated
 .classpath
 .factorypath
