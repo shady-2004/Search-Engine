@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Test;
 public class TestPageRank {
 
     @Test
-    void testPageRanker() throws InterruptedException {
+    void testPageRanker() throws InterruptedException, SQLException {
         // arrange
         PageRank.pageRank();
     }

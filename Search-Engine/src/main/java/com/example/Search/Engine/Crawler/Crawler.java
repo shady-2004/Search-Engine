@@ -124,20 +124,31 @@ public class Crawler {
                 // Check domain limit after marking as visited
                 String domain = getDomain(normalizedUrlStr);
                 AtomicInteger domainCount = domainPageCounts.computeIfAbsent(domain, k -> new AtomicInteger(0));
-                if (domainCount.get() >= MAX_PAGES_PER_DOMAIN) {
-                    pendingPages.decrementAndGet();
+                boolean canCrawl = false;
+                int currentCount;
+                do {
+                    currentCount = domainCount.get();
+                    if (currentCount >= MAX_PAGES_PER_DOMAIN) {
+//                        System.err.println(Thread.currentThread().getName() + " - Skipping " + normalizedUrlStr + ": Domain " + domain + " reached limit of " + MAX_PAGES_PER_DOMAIN + " pages");
+                        pendingPages.decrementAndGet();
+                        break;
+                    }
+                    canCrawl = domainCount.compareAndSet(currentCount, currentCount + 1);
+                } while (!canCrawl);
+
+                if (!canCrawl) {
                     continue;
                 }
 
                 Document doc = fetchHtmlDocument(normalizedUrlStr);
                 if (doc == null) {
                     visitedUrls.remove(normalizedUrlStr);
+                    domainCount.decrementAndGet(); // Undo reservation
                     pendingPages.decrementAndGet();
                     continue;
                 }
 
                 // Increment domain page count
-                domainCount.incrementAndGet();
                 queuedUrls.remove(normalizedUrlStr);
                 System.out.println(Thread.currentThread().getName() + " - Successfully downloaded " + normalizedUrlStr);
 
@@ -153,9 +164,10 @@ public class Crawler {
                     if (normalizedHyperLink == null) {
                         continue;
                     }
-                    String linkDomain = getDomain(normalizedHyperLink);
-                    AtomicInteger linkDomainCount = domainPageCounts.computeIfAbsent(linkDomain, k -> new AtomicInteger(0));
-                    if (linkDomainCount.get() >= MAX_PAGES_PER_DOMAIN) {
+                    String domainLink = getDomain(normalizedHyperLink);
+                    AtomicInteger domainLinkCount = domainPageCounts.computeIfAbsent(domainLink, k -> new AtomicInteger(0));
+                    if (domainLinkCount.get() >= MAX_PAGES_PER_DOMAIN) {
+//                        System.err.println(Thread.currentThread().getName() + " - Skipping extractedlink: " + normalizedHyperLink + ": Domain limit reached");
                         continue;
                     }
                     if (visitedUrls.contains(normalizedHyperLink) || queuedUrls.contains(normalizedHyperLink)) {
@@ -325,7 +337,7 @@ public class Crawler {
                 String domain = getDomain(normalizedUrlStr);
                 AtomicInteger domainCount = domainPageCounts.computeIfAbsent(domain, k -> new AtomicInteger(0));
                 if (domainCount.get() >= MAX_PAGES_PER_DOMAIN) {
-                    visitedUrls.add(normalizedUrlStr);
+//                    System.err.println(Thread.currentThread().getName() + " - Skipping " + normalizedUrlStr +  "from URL seed " + ": Domain limit reached");
                     continue;
                 }
                 if (visitedUrls.contains(normalizedUrlStr) || queuedUrls.contains(normalizedUrlStr)) {
