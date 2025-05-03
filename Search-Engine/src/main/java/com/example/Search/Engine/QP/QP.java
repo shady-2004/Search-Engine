@@ -3,7 +3,6 @@ package com.example.Search.Engine.QP;
 import com.example.Search.Engine.PS.PS;
 import opennlp.tools.tokenize.TokenizerME;
 import opennlp.tools.tokenize.TokenizerModel;
-import java.io.FileInputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashSet;

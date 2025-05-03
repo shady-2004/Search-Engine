@@ -3,30 +3,19 @@ package com.example.Search.Engine;
 import org.springframework.context.event.ContextRefreshedEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
-import com.example.Search.Engine.Indexer.Tokenizer;
 import com.example.Search.Engine.QP.QP;
-import com.example.Search.Engine.PS.PS;
-import com.example.Search.Engine.Ranker.Ranker;
 import org.springframework.beans.factory.annotation.Autowired;
 import java.sql.*;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Component
 public class DatabaseManager {
     private static final String DB_URL = "jdbc:sqlite:./data/search_index.db";
     private Connection connection;
-    private Tokenizer tokenizer;
     private final QP queryProcessor;
-    private final PS phraseSearcher;
-    private final Ranker ranker;
-
     @Autowired
-    public DatabaseManager(QP queryProcessor, PS phraseSearcher, Ranker ranker) {
+    public DatabaseManager(QP queryProcessor) {
         this.queryProcessor = queryProcessor;
-        this.phraseSearcher = phraseSearcher;
-        this.ranker = ranker;
-        this.tokenizer = new Tokenizer();
         initialize();
     }
 

@@ -4,7 +4,6 @@ import java.io.*;
 import java.util.*;
 import java.util.regex.Pattern;
 import org.jsoup.nodes.Document;
-import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 import org.springframework.stereotype.Component;
 import org.springframework.core.io.ClassPathResource;
@@ -21,7 +20,6 @@ public class Tokenizer {
     private final Pattern wordPattern;
     private static final int MIN_WORD_LENGTH = 2;
     private static final int MAX_WORD_LENGTH = 45;
-    //private final Stemmer stemmer;
     
     // Position weights
     public static final double TITLE_WEIGHT = 3.0;
@@ -69,38 +67,11 @@ public class Tokenizer {
         public void addPosition(int position) {
             positions.add(position);
         }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (o == null || getClass() != o.getClass()) return false;
-            Token token = (Token) o;
-            return Double.compare(token.count, count) == 0 &&
-                Objects.equals(word, token.word) &&
-                Objects.equals(position, token.position) &&
-                Objects.equals(positions, token.positions);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(word, count, position, positions);
-        }
-
-        @Override
-        public String toString() {
-            return "Token{" +
-                "word='" + word + '\'' +
-                ", count=" + count +
-                ", position='" + position + '\'' +
-                ", positions=" + positions +
-                '}';
-        }
     }
 
     public Tokenizer() {
         this.stopWords = new HashSet<>();
         this.wordPattern = Pattern.compile("\\b[\\w']+\\b");
-        //this.stemmer = new Stemmer();
         loadStopWords();
     }
 
@@ -117,7 +88,6 @@ public class Tokenizer {
                     }
                 }
             }
-            System.out.println("Successfully loaded " + stopWords.size() + " stopwords");
         } catch (IOException e) {
             System.err.println("Warning: Could not load stopwords file. Proceeding without stopwords: " + e.getMessage());
         }
@@ -152,21 +122,17 @@ public class Tokenizer {
         ConcurrentHashMap<String, Token> tokens = new ConcurrentHashMap<>();
         AtomicInteger totalTokens = new AtomicInteger(0);
 
-        // Process title with highest weight
         CompletableFuture<Void> titleFuture = CompletableFuture.runAsync(() -> {
             String title = doc.title();
             if (title != null && !title.isEmpty()) {
-                System.out.println("Processing title: " + title);
                 processText(title, tokens, "title");
                 totalTokens.addAndGet(countTokens(title));
             }
         });
 
-        // Process headings in parallel
         CompletableFuture<Void> h1Future = CompletableFuture.runAsync(() -> {
             Elements h1s = doc.select("h1");
             if (!h1s.isEmpty()) {
-                System.out.println("Processing " + h1s.size() + " h1 elements");
                 h1s.parallelStream().forEach(h1 -> {
                     String text = h1.text();
                     if (!text.isEmpty()) {
@@ -180,7 +146,6 @@ public class Tokenizer {
         CompletableFuture<Void> h2Future = CompletableFuture.runAsync(() -> {
             Elements h2s = doc.select("h2");
             if (!h2s.isEmpty()) {
-                System.out.println("Processing " + h2s.size() + " h2 elements");
                 h2s.parallelStream().forEach(h2 -> {
                     String text = h2.text();
                     if (!text.isEmpty()) {
@@ -191,11 +156,9 @@ public class Tokenizer {
             }
         });
 
-        // Process regular content in parallel
         CompletableFuture<Void> contentFuture = CompletableFuture.runAsync(() -> {
             Elements paragraphs = doc.select("p");
             if (!paragraphs.isEmpty()) {
-                System.out.println("Processing " + paragraphs.size() + " paragraphs");
                 paragraphs.parallelStream().forEach(p -> {
                     String text = p.text();
                     if (!text.isEmpty()) {
@@ -206,25 +169,20 @@ public class Tokenizer {
             }
         });
 
-        // Wait for all processing to complete
         CompletableFuture.allOf(titleFuture, h1Future, h2Future, contentFuture).join();
 
-        // Normalize frequencies
         int finalTotalTokens = totalTokens.get();
         if (finalTotalTokens > 0) {
             tokens.values().parallelStream().forEach(token -> 
                 token.setCount(token.getCount() / finalTotalTokens));
         }
 
-        System.out.println("Processed document with " + finalTotalTokens + " total tokens and " + 
-            tokens.size() + " unique tokens");
         return new HashMap<>(tokens);
     }
 
     private void processText(String text, ConcurrentHashMap<String, Token> tokens, String position) {
         List<String> words = tokenizeString(text, true);
         if (words.isEmpty()) {
-            System.out.println("Warning: No valid words found in text for position: " + position);
             return;
         }
         

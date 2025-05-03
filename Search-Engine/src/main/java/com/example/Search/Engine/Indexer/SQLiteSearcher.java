@@ -8,14 +8,10 @@ import org.springframework.stereotype.Component;
 @Component
 public class SQLiteSearcher implements AutoCloseable {
     private final Connection connection;
-    private static final int BATCH_SIZE = 1000;
     private static final double TITLE_WEIGHT = 3.0;
     private static final double H1_WEIGHT = 2.0;
     private static final double H2_WEIGHT = 1.5;
     private static final double CONTENT_WEIGHT = 1.0;
-
-    private final ThreadLocal<Connection> threadLocalConnection = new ThreadLocal<>();
-    private final Object connectionLock = new Object();
 
     public static class SearchResult {
         private final String url;
@@ -39,25 +35,13 @@ public class SQLiteSearcher implements AutoCloseable {
         public double getScore() {
             return score;
         }
-
-        @Override
-        public String toString() {
-            return "SearchResult{" +
-                "url='" + url + '\'' +
-                ", title='" + title + '\'' +
-                ", score=" + score +
-                '}';
-        }
     }
 
     public SQLiteSearcher() throws SQLException {
-        //String projectRoot = System.getProperty("user.dir");
         String dbPath = "jdbc:sqlite:data/search_index.db";
-        
         connection = DriverManager.getConnection(dbPath);
         connection.setAutoCommit(false);
         initializeDatabase();
-        System.out.println("Connected to database: " + dbPath);
     }
 
     private void initializeDatabase() {
@@ -102,25 +86,17 @@ public class SQLiteSearcher implements AutoCloseable {
             stmt.execute(createWordIndex);
             stmt.execute(createDocIndex);
             connection.commit();
-            System.out.println("Database schema initialized successfully");
         } catch (SQLException e) {
-            System.err.println("Failed to initialize database: " + e.getMessage());
             throw new RuntimeException("Database initialization failed", e);
         }
     }
 
-    public void addDocument(String url, String title, Map<String, Tokenizer.Token> tokens) {
-        addDocuments(List.of(Map.entry(url, tokens)));
-    }
-
     public void addDocuments(List<Map.Entry<String, Map<String, Tokenizer.Token>>> documents) {
         try {
-            // First, get or create document IDs
             Map<String, Long> urlToDocId = new ConcurrentHashMap<>();
             String getDocId = "SELECT id FROM DocumentMetaData WHERE url = ?";
             String insertDoc = "INSERT INTO DocumentMetaData (url, title) VALUES (?, ?)";
             
-            // Process documents in parallel to get/create IDs
             int processors = Runtime.getRuntime().availableProcessors();
             ExecutorService executor = Executors.newFixedThreadPool(processors);
             List<CompletableFuture<Void>> idFutures = new ArrayList<>();
@@ -129,33 +105,25 @@ public class SQLiteSearcher implements AutoCloseable {
                 CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
                     try {
                         String url = doc.getKey();
-                        try (PreparedStatement getStmt = getThreadConnection().prepareStatement(getDocId);
-                             PreparedStatement insertStmt = getThreadConnection().prepareStatement(insertDoc, Statement.RETURN_GENERATED_KEYS)) {
+                        try (PreparedStatement getStmt = connection.prepareStatement(getDocId);
+                             PreparedStatement insertStmt = connection.prepareStatement(insertDoc, Statement.RETURN_GENERATED_KEYS)) {
                             
-                            // First try to get existing document ID
                             getStmt.setString(1, url);
                             try (ResultSet rs = getStmt.executeQuery()) {
                                 if (rs.next()) {
-                                    // Document exists, get its ID
-                                    long docId = rs.getLong(1);
-                                    urlToDocId.put(url, docId);
-                                    System.out.println("Found existing document ID " + docId + " for URL: " + url);
+                                    urlToDocId.put(url, rs.getLong(1));
                                 } else {
-                                    // Document doesn't exist, insert it
                                     insertStmt.setString(1, url);
-                                    insertStmt.setString(2, url); // Using URL as title for now
+                                    insertStmt.setString(2, url);
                                     insertStmt.executeUpdate();
                                     
                                     try (ResultSet generatedKeys = insertStmt.getGeneratedKeys()) {
                                         if (generatedKeys.next()) {
-                                            long docId = generatedKeys.getLong(1);
-                                            urlToDocId.put(url, docId);
-                                            System.out.println("Created new document ID " + docId + " for URL: " + url);
+                                            urlToDocId.put(url, generatedKeys.getLong(1));
                                         }
                                     }
                                 }
                             }
-                            getThreadConnection().commit();
                         }
                     } catch (SQLException e) {
                         throw new RuntimeException("Error processing document ID: " + e.getMessage(), e);
@@ -164,7 +132,6 @@ public class SQLiteSearcher implements AutoCloseable {
                 idFutures.add(future);
             }
             
-            // Wait for all ID processing to complete
             CompletableFuture.allOf(idFutures.toArray(new CompletableFuture[0])).join();
             executor.shutdown();
             try {
@@ -177,32 +144,18 @@ public class SQLiteSearcher implements AutoCloseable {
                 throw new RuntimeException("Interrupted while waiting for document ID processing", e);
             }
 
-            // Verify all documents have IDs
             for (Map.Entry<String, Map<String, Tokenizer.Token>> doc : documents) {
                 if (!urlToDocId.containsKey(doc.getKey())) {
-                    System.err.println("Error: Failed to get or create document ID for URL: " + doc.getKey());
-                    return; // Exit if any document failed
+                    throw new RuntimeException("Failed to get or create document ID for URL: " + doc.getKey());
                 }
             }
 
-            // Count total tokens
-            int totalTokens = 0;
-            for (Map.Entry<String, Map<String, Tokenizer.Token>> doc : documents) {
-                Long docId = urlToDocId.get(doc.getKey());
-                int docTokens = doc.getValue().size();
-                totalTokens += docTokens;
-                System.out.println("Document " + docId + " has " + docTokens + " unique tokens");
-            }
-            System.out.println("Total unique tokens across all documents: " + totalTokens);
-
-            // Insert all tokens in bulk
             String insertToken = """
                 INSERT INTO InvertedIndex (word, doc_id, frequency, importance)
                 VALUES (?, ?, ?, ?)
             """;
             
-            int insertedTokens = 0;
-            try (PreparedStatement pstmt = getThreadConnection().prepareStatement(insertToken)) {
+            try (PreparedStatement pstmt = connection.prepareStatement(insertToken)) {
                 for (Map.Entry<String, Map<String, Tokenizer.Token>> doc : documents) {
                     Long docId = urlToDocId.get(doc.getKey());
                     
@@ -212,56 +165,42 @@ public class SQLiteSearcher implements AutoCloseable {
                         pstmt.setDouble(3, token.getCount());
                         pstmt.setDouble(4, getPositionWeight(token.getPosition()));
                         pstmt.addBatch();
-                        insertedTokens++;
                     }
                 }
                 
-                // Execute the batch and commit
-                int[] results = pstmt.executeBatch();
-                System.out.println("Executed batch of " + results.length + " tokens (expected: " + insertedTokens + ")");
-                getThreadConnection().commit();
+                pstmt.executeBatch();
             }
 
-            // Insert word positions in bulk
             String insertPosition = """
                 INSERT INTO WordPositions (index_id, position)
                 VALUES (?, ?)
             """;
             
-            int totalPositions = 0;
-            try (PreparedStatement pstmt = getThreadConnection().prepareStatement(insertPosition)) {
+            try (PreparedStatement pstmt = connection.prepareStatement(insertPosition)) {
                 for (Map.Entry<String, Map<String, Tokenizer.Token>> doc : documents) {
                     Long docId = urlToDocId.get(doc.getKey());
                     
                     for (Tokenizer.Token token : doc.getValue().values()) {
                         for (Integer position : token.getPositions()) {
-                            pstmt.setLong(1, docId); // Using docId as index_id for now
+                            pstmt.setLong(1, docId);
                             pstmt.setInt(2, position);
                             pstmt.addBatch();
-                            totalPositions++;
                         }
                     }
                 }
                 
-                // Execute the batch and commit
-                int[] results = pstmt.executeBatch();
-                System.out.println("Executed batch of " + results.length + " positions (expected: " + totalPositions + ")");
-                getThreadConnection().commit();
+                pstmt.executeBatch();
             }
 
-            // Update IDF values once for all documents
+            connection.commit();
             updateIDF();
-            getThreadConnection().commit();
-            System.out.println("Successfully added " + documents.size() + " documents in bulk");
-            
         } catch (SQLException e) {
             try {
-                getThreadConnection().rollback();
+                connection.rollback();
             } catch (SQLException rollbackError) {
-                System.err.println("Error during rollback: " + rollbackError.getMessage());
+                throw new RuntimeException("Error during rollback: " + rollbackError.getMessage(), rollbackError);
             }
-            System.err.println("Failed to add documents in bulk: " + e.getMessage());
-            throw new RuntimeException("Failed to add documents in bulk", e);
+            throw new RuntimeException("Error adding documents to database", e);
         }
     }
 
@@ -331,57 +270,6 @@ public class SQLiteSearcher implements AutoCloseable {
         System.out.println("IDF update completed successfully");
     }
 
-    public List<SearchResult> search(String query, Tokenizer tokenizer) {
-        List<String> queryTokens = tokenizer.tokenizeString(query, true);
-        if (queryTokens.isEmpty()) {
-            return Collections.emptyList();
-        }
-
-        String sql = """
-            WITH token_scores AS (
-                SELECT 
-                    d.url,
-                    d.title,
-                    i.word,
-                    i.frequency * i.importance * i.IDF as weighted_score
-                FROM DocumentMetaData d
-                JOIN InvertedIndex i ON d.id = i.doc_id
-                WHERE i.word IN (%s)
-            )
-            SELECT url, title, SUM(weighted_score) as score
-            FROM token_scores
-            GROUP BY url, title
-            ORDER BY score DESC
-            LIMIT 10
-        """;
-
-        String placeholders = String.join(",", Collections.nCopies(queryTokens.size(), "?"));
-        sql = String.format(sql, placeholders);
-
-        List<SearchResult> results = new ArrayList<>();
-        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
-            int paramIndex = 1;
-            for (String token : queryTokens) {
-                pstmt.setString(paramIndex++, token);
-            }
-
-            try (ResultSet rs = pstmt.executeQuery()) {
-                while (rs.next()) {
-                    results.add(new SearchResult(
-                        rs.getString("url"),
-                        rs.getString("title"),
-                        rs.getDouble("score")
-                    ));
-                }
-            }
-        } catch (SQLException e) {
-            System.err.println("Search query failed: " + e.getMessage());
-            throw new RuntimeException("Search failed", e);
-        }
-
-        return results;
-    }
-
     private double getPositionWeight(String position) {
         return switch (position) {
             case "title" -> TITLE_WEIGHT;
@@ -391,27 +279,11 @@ public class SQLiteSearcher implements AutoCloseable {
         };
     }
 
-    public Connection getConnection() {
-        return connection;
-    }
-
-    private Connection getThreadConnection() throws SQLException {
-        Connection conn = threadLocalConnection.get();
-        if (conn == null || conn.isClosed()) {
-            synchronized (connectionLock) {
-                conn = DriverManager.getConnection("jdbc:sqlite:data/search_index.db");
-                conn.setAutoCommit(false);
-                threadLocalConnection.set(conn);
-            }
-        }
-        return conn;
-    }
-
     public List<Map.Entry<String, String>> getAllDocuments() throws SQLException {
-        String sql = "SELECT id, url, title, html FROM DocumentMetaData";
+        String sql = "SELECT url, html FROM DocumentMetaData";
         List<Map.Entry<String, String>> results = new ArrayList<>();
         
-        try (Statement stmt = getThreadConnection().createStatement();
+        try (Statement stmt = connection.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
             
             while (rs.next()) {
@@ -424,14 +296,14 @@ public class SQLiteSearcher implements AutoCloseable {
         return results;
     }
 
+    public Connection getConnection() {
+        return connection;
+    }
+
     @Override
     public void close() {
         try {
-            Connection conn = threadLocalConnection.get();
-            if (conn != null && !conn.isClosed()) {
-                conn.close();
-                threadLocalConnection.remove();
-            }
+            connection.close();
         } catch (SQLException e) {
             System.err.println("Error closing connection: " + e.getMessage());
         }

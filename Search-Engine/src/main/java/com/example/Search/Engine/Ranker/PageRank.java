@@ -1,7 +1,5 @@
 package com.example.Search.Engine.Ranker;
 
-import com.example.Search.Engine.Ranker.TestDataPageRank;
-
 import java.util.HashMap;
 import java.util.Map;
 

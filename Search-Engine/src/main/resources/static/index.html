@@ -137,7 +137,7 @@
                 const resultElement = document.createElement('div');
                 resultElement.className = 'result-item';
                 resultElement.innerHTML = `
-                    <a href="${result.url}" class="result-title">${result.title}</a>
+                    <a target="_blank" href="${result.url}" class="result-title">${result.title}</a>
                     <div class="result-url">${result.url}</div>
                     <div class="result-score">Relevance score: ${result.score}</div>
                 `;

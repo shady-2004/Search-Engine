@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
 public class Crawler {
-    private static final int MAX_PAGES = 500;
+    private static final int MAX_PAGES = 200;
     private static final int MAX_PAGES_PER_DOMAIN = 5;
     private static final int CHECKPOINT_INTERVAL = 20;
     private static final int MAX_QUEUE_SIZE = 10000;
@@ -31,7 +31,7 @@ public class Crawler {
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) Gecko/20100101 Firefox/130.0"
     };
-    private static final String URLS_FILE_NAME = "src/main/resources/urls.txt";
+    private static final String URLS_FILE_NAME = "Search-Engine/src/main/resources/urls.txt";
     private final Map<String, BaseRobotRules> robotsCache = new HashMap<>();
     private final ConcurrentHashMap<String, AtomicInteger> domainPageCounts = new ConcurrentHashMap<>();
 

@@ -1,7 +1,6 @@
 package com.example.Search.Engine.controller;
 
 import com.example.Search.Engine.DatabaseManager;
-import com.example.Search.Engine.SearchResult;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
