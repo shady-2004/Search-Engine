@@ -12,31 +12,48 @@ import org.springframework.stereotype.Service;
 @Service
 public class Ranker {
     static final int threads = 10;
+    static final double TFIDF_WEIGHT = 0.7;
+    static final double PAGERANK_WEIGHT = 0.3;
+    static final int THREADING_THRESHOLD = 1000;
 
     private Double docScore(TestData.DocumentData docData) {
-        double score = 0;
+        double tfidfScore = 0.0;
 
         List<String> queryTerms = TestData.getQueryTerms();
-        Map<String, Integer> TermFrequencies = docData.getTermFrequencies();
-        Map<String, Integer> DocumentFrequencies = TestData.getDocumentFrequencies();
+        Map<String, Integer> termFrequencies = docData.getTermFrequencies();
+        Map<String, Integer> documentFrequencies = TestData.getDocumentFrequencies();
 
         int N = TestData.getTotalDocuments();
         for (String queryTerm : queryTerms) {
-            score +=  (TermFrequencies.get(queryTerm) * log((double) N / DocumentFrequencies.get(queryTerm)));
+            int tf = termFrequencies.getOrDefault(queryTerm, 0);
+            int df = documentFrequencies.getOrDefault(queryTerm, 1); // avoid division by zero
+            tfidfScore += tf * log((double) N / df);
         }
-        return score;
+
+        double pageRank = docData.getPageRank(); // Assumes this method exists
+
+
+        return TFIDF_WEIGHT * tfidfScore + PAGERANK_WEIGHT * pageRank;
     }
 
     public List<Integer> Rank() throws InterruptedException {
-        List<TestData.DocumentData> Documents = TestData.getCandidateDocuments();
+        List<TestData.DocumentData> documents = TestData.getCandidateDocuments();
         ConcurrentHashMap<Integer, Double> results = new ConcurrentHashMap<>();
-
         List<Integer> rankedDocs = new ArrayList<>();
 
-        List<RankParallel> threadList = getRankParallels(Documents, results);
-
-        for(RankParallel t:threadList)
-            t.join();
+        if (documents.size() < THREADING_THRESHOLD) {
+            // Single-threaded processing
+            for (TestData.DocumentData doc : documents) {
+                double score = docScore(doc);
+                results.put(doc.getDocId(), score);
+            }
+        } else {
+            // Multi-threaded processing
+            List<RankParallel> threadList = getRankParallels(documents, results);
+            for (RankParallel t : threadList) {
+                t.join();
+            }
+        }
 
         List<Map.Entry<Integer, Double>> sortedDocs = new ArrayList<>(results.entrySet());
         sortedDocs.sort((d1, d2) -> d2.getValue().compareTo(d1.getValue()));
