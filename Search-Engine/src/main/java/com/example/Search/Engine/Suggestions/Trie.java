@@ -65,9 +65,9 @@ public class Trie {
         List<SimpleEntry<String, Integer>> topSuggestions;
 
         TrieNode() {
-            wordEnd = false;
-            children = new HashMap<>();
-            topSuggestions = new ArrayList<>();
+            this.wordEnd = false;
+            this.children = new HashMap<>();
+            this.topSuggestions = new ArrayList<>();
         }
     }
 }

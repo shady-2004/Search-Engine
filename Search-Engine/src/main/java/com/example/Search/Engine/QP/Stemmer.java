@@ -411,6 +411,7 @@ public class Stemmer
                     if (ch < 0) break;
                     System.out.print((char)ch);
                 }
+                in.close();
                 }
                 catch (IOException e)
                 {  System.out.println("error reading " + args[i]);
