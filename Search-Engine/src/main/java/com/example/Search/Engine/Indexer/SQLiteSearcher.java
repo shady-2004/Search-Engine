@@ -105,8 +105,8 @@ public class SQLiteSearcher implements AutoCloseable {
                 CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
                     try {
                         String url = doc.getKey();
-                        try (PreparedStatement getStmt = connection.prepareStatement(getDocId);
-                             PreparedStatement insertStmt = connection.prepareStatement(insertDoc, Statement.RETURN_GENERATED_KEYS)) {
+                        try (PreparedStatement getStmt = threadLocalConnection.get().prepareStatement(getDocId);
+                             PreparedStatement insertStmt = threadLocalConnection.get().prepareStatement(insertDoc, Statement.RETURN_GENERATED_KEYS)) {
                             
                             getStmt.setString(1, url);
                             try (ResultSet rs = getStmt.executeQuery()) {
