@@ -11,37 +11,6 @@ import java.util.stream.Collectors;
 public class DataBaseManager {
     private static final String URL = "jdbc:sqlite:./data/search_index.db";
 
-    public static class DocumentData {
-        private final int docId;
-        private final Map<String, Integer> termFrequencies;
-        private final int documentLength;
-        private final double pageRank;
-
-        public DocumentData(int docId, Map<String, Integer> termFrequencies,
-                            int documentLength, double pageRank) {
-            this.docId = docId;
-            this.termFrequencies = termFrequencies;
-            this.documentLength = documentLength;
-            this.pageRank = pageRank;
-        }
-
-        public int getDocId() {
-            return docId;
-        }
-
-        public Map<String, Integer> getTermFrequencies() {
-            return termFrequencies;
-        }
-
-        public int getDocumentLength() {
-            return documentLength;
-        }
-
-        public double getPageRank() {
-            return pageRank;
-        }
-    }
-
     public static Connection getConnection() throws SQLException {
         return DriverManager.getConnection(URL);
     }
