@@ -7,6 +7,7 @@ import java.util.*;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.Duration;
+import java.util.stream.Collectors;
 
 public class DataBaseManager {
     private static final String URL = "jdbc:sqlite:./data/search_index.db";
