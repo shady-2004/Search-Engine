@@ -10,7 +10,7 @@ import java.time.Duration;
 import java.util.stream.Collectors;
 
 public class DataBaseManager {
-    private static final String URL = "jdbc:sqlite:./data/search_index.db";
+    private static final String URL = "jdbc:sqlite:data/search_index.db";
 
     public static Connection getConnection() throws SQLException {
         return DriverManager.getConnection(URL);

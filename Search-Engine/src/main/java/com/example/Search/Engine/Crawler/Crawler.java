@@ -384,7 +384,8 @@ public class Crawler {
                         url TEXT NOT NULL,
                         title TEXT,
                         html TEXT,
-                        last_crawled_date TEXT DEFAULT CURRENT_TIMESTAMP
+                        last_crawled_date TEXT DEFAULT CURRENT_TIMESTAMP,
+                        page_rank REAL DEFAULT 0.0
                     )
                     """);
             stmt.execute("CREATE TABLE IF NOT EXISTS extracted_links (" +

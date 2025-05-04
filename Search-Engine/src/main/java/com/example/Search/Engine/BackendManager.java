@@ -10,6 +10,7 @@ import com.example.Search.Engine.Ranker.Ranker;
 import org.springframework.beans.factory.annotation.Autowired;
 import java.sql.*;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Component
 public class BackendManager {
@@ -122,7 +123,10 @@ public class BackendManager {
             }
 
             // Rank documents
-            List<Integer> rankedDocIds = Ranker.rank(documents, stemmedQueryWords);
+            List<Map.Entry<Integer, Double>> rankedEntries = Ranker.rank(documents, stemmedQueryWords);
+            List<Integer> rankedDocIds = rankedEntries.stream()
+                .map(Map.Entry::getKey)
+                .collect(Collectors.toList());
             System.out.println("Ranked " + rankedDocIds.size() + " documents");
 
             // Apply pagination
@@ -137,25 +141,11 @@ public class BackendManager {
 
             // Get the documents for this page, even if it's a partial page
             List<Integer> pagedDocIds = new ArrayList<>();
-            for (int i = startIndex; i < endIndex && i < rankedDocIds.size(); i++) {
-                pagedDocIds.add(rankedDocIds.get(i));
-            }
-
-            // Compute scores for documents
             Map<Integer, Double> docScores = new HashMap<>();
-            for (QueryIndex.DocumentData doc : documents) {
-                double score = 0.0;
-                Map<String, List<Double>> wordInfo = doc.getWordInfo();
-                for (String queryTerm : stemmedQueryWords) {
-                    List<Double> info = wordInfo.get(queryTerm);
-                    if (info != null && info.size() >= 2) {
-                        double tf = info.get(0); // Term frequency
-                        double idf = info.get(1); // IDF
-                        score += tf * idf;
-                    }
-                }
-                score = Ranker.TFIDF_WEIGHT * score + Ranker.PAGERANK_WEIGHT * doc.getPageRank();
-                docScores.put(doc.getDocId(), score);
+            for (int i = startIndex; i < endIndex && i < rankedDocIds.size(); i++) {
+                Map.Entry<Integer, Double> entry = rankedEntries.get(i);
+                pagedDocIds.add(entry.getKey());
+                docScores.put(entry.getKey(), entry.getValue());
             }
 
             // Get matching documents with their metadata
