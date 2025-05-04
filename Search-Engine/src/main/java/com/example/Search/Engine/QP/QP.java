@@ -36,7 +36,9 @@ public class QP {
 
     public static void main(String[] args) {
         QP qp = new QP();
+
         String query = "\"stay\"";
+
         try (Connection conn = DriverManager.getConnection(DB_URL)) {
             conn.setAutoCommit(false);
             QueryIndex.QueryResult result = qp.search(query);
@@ -48,7 +50,7 @@ public class QP {
             } else {
                 System.out.println(result.documents);
                 List<Integer> ranked = Ranker.rank(result.documents, result.queryWords);
-                System.out.println(ranked);
+                System.out.println("Ranked: "+ ranked);
             }
         } catch (SQLException e) {
             System.err.println("Database error: " + e.getMessage());

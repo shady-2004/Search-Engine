@@ -13,8 +13,8 @@ import java.util.List;
  * Provides a REST API endpoint for searching documents.
  */
 @RestController
-@RequestMapping("/api/search")
-@CrossOrigin(origins = "http://localhost:5173", allowCredentials = "true")
+@RequestMapping("/api")
+@CrossOrigin(origins = "http://localhost:5173", methods = {RequestMethod.GET, RequestMethod.OPTIONS}, allowedHeaders = "*", allowCredentials = "true")
 public class SearchController {
 
     private final BackendManager backendManager;

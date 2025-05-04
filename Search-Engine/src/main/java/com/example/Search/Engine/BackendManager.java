@@ -128,11 +128,18 @@ public class BackendManager {
             // Apply pagination
             int startIndex = page * size;
             int endIndex = Math.min(startIndex + size, rankedDocIds.size());
+            
+            // If we're beyond the last page, return empty results with correct total
             if (startIndex >= rankedDocIds.size()) {
                 System.out.println("Page " + page + " is out of range");
-                return new SearchResponse(Collections.emptyList(), totalCount);
+                return new SearchResponse(Collections.emptyList(), rankedDocIds.size());
             }
-            List<Integer> pagedDocIds = rankedDocIds.subList(startIndex, endIndex);
+
+            // Get the documents for this page, even if it's a partial page
+            List<Integer> pagedDocIds = new ArrayList<>();
+            for (int i = startIndex; i < endIndex && i < rankedDocIds.size(); i++) {
+                pagedDocIds.add(rankedDocIds.get(i));
+            }
 
             // Compute scores for documents
             Map<Integer, Double> docScores = new HashMap<>();
@@ -174,8 +181,8 @@ public class BackendManager {
                 }
             }
 
-            System.out.println("Found " + results.size() + " results out of " + totalCount + " total");
-            return new SearchResponse(results, totalCount);
+            System.out.println("Found " + results.size() + " results for page " + page + " out of " + rankedDocIds.size() + " total");
+            return new SearchResponse(results, rankedDocIds.size());
 
         } catch (SQLException e) {
             System.err.println("Search query failed: " + e.getMessage());
