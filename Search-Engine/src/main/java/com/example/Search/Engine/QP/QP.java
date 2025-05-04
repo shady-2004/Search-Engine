@@ -1,5 +1,10 @@
 package com.example.Search.Engine.QP;
 
+import com.example.Search.Engine.Ranker.Ranker;
+import opennlp.tools.tokenize.TokenizerME;
+import opennlp.tools.tokenize.TokenizerModel;
+
+import java.io.InputStream;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -11,38 +16,56 @@ import org.springframework.stereotype.Component;
 public class QP {
 
     private static final String DB_URL = "jdbc:sqlite:data/search_index.db";
+    private static TokenizerME tokenizer;
 
-    public static void main(String[] args) {
-        QP qp = new QP();
-        String query = "stai"; // Example query with operator and phrases
-        try (Connection conn = DriverManager.getConnection(DB_URL)) {
-            conn.setAutoCommit(false);
-            List<QueryIndex.DocumentData> results = qp.search(query);
-            conn.commit();
-            System.out.println("Relevant Documents for query \"" + query + "\":");
-            if (results.isEmpty()) {
-                System.out.println("No documents found.");
-            } else {
-                for (QueryIndex.DocumentData doc : results) {
-                    System.out.println("Document - DocID: " + doc.getDocId() +
-                            ", WordInfo: " + doc.getWordInfo());
-                }
+    static {
+        // Load the tokenizer model from the classpath
+        try {
+            InputStream modelIn = QP.class.getClassLoader().getResourceAsStream("models/en-token.bin");
+            if (modelIn == null) {
+                throw new RuntimeException("Tokenizer model file 'models/en-token.bin' not found in resources");
             }
-        } catch (SQLException e) {
-            System.err.println("Database error: " + e.getMessage());
+            TokenizerModel model = new TokenizerModel(modelIn);
+            tokenizer = new TokenizerME(model);
+            modelIn.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+            throw new RuntimeException("Failed to load tokenizer model", e);
         }
     }
 
-    public List<QueryIndex.DocumentData> search(String query) throws SQLException {
+    public static void main(String[] args) {
+        QP qp = new QP();
+        String query = "naruto";
+        try (Connection conn = DriverManager.getConnection(DB_URL)) {
+            conn.setAutoCommit(false);
+            QueryIndex.QueryResult result = qp.search(query); // Now returns QueryResult
+            conn.commit();
+            System.out.println("Query Words: " + result.queryWords);
+            System.out.println("Relevant Documents for query \"" + query + "\":");
+            if (result.documents.isEmpty()) {
+                System.out.println("No documents found.");
+            } else {
+                List<Integer> ranked = Ranker.rank(result.documents, result.queryWords);
+                System.out.println(ranked);
+            }
+        } catch (SQLException e) {
+            System.err.println("Database error: " + e.getMessage());
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public QueryIndex.QueryResult search(String query) throws SQLException {
         System.out.println("QP: Processing query: " + query);
         if (query == null || query.trim().isEmpty()) {
             System.out.println("QP: Empty query, returning empty result");
-            return new ArrayList<>();
+            return new QueryIndex.QueryResult(new ArrayList<>(), new ArrayList<>(), new HashMap<>());
         }
 
         // Detect operator in the query
         String operator = detectOperator(query);
-        List<QueryIndex.DocumentData> documents;
+        QueryIndex.QueryResult finalResult;
 
         if (!operator.isEmpty()) {
             // Split query into two parts based on operator
@@ -58,7 +81,12 @@ public class QP {
             QueryIndex.QueryResult leftResult = processQueryComponent(leftQuery);
             QueryIndex.QueryResult rightResult = processQueryComponent(rightQuery);
 
+            // Combine query words
+            List<String> combinedQueryWords = new ArrayList<>(leftResult.queryWords);
+            combinedQueryWords.addAll(rightResult.queryWords);
+
             // Apply Boolean operator logic
+            List<QueryIndex.DocumentData> documents;
             switch (operator) {
                 case "AND":
                     documents = intersectDocuments(leftResult.documents, rightResult.documents);
@@ -74,17 +102,17 @@ public class QP {
                     break;
                 default:
                     System.out.println("QP: Unknown operator, returning empty result");
-                    return new ArrayList<>();
+                    return new QueryIndex.QueryResult(new ArrayList<>(), combinedQueryWords, new HashMap<>());
             }
+            finalResult = new QueryIndex.QueryResult(documents, combinedQueryWords, new HashMap<>());
         } else {
             // No operator, process as single query
-            QueryIndex.QueryResult result = processQueryComponent(query);
-            documents = result.documents;
+            finalResult = processQueryComponent(query);
         }
 
-        System.out.println("QP: Retrieved " + documents.size() + " documents from QueryIndex");
-        System.out.println("QP: Returning " + documents.size() + " documents");
-        return documents;
+        System.out.println("QP: Retrieved " + finalResult.documents.size() + " documents from QueryIndex");
+        System.out.println("QP: Returning query words: " + finalResult.queryWords);
+        return finalResult;
     }
 
     private QueryIndex.QueryResult processQueryComponent(String query) throws SQLException {
@@ -92,18 +120,23 @@ public class QP {
             // Remove quotes from the phrase
             String cleanQuery = query.replaceAll("^\"|\"$", "");
             System.out.println("QP: Processing phrase query: " + cleanQuery);
-            return QueryIndex.queryPhrase(cleanQuery);
+            // Tokenize the phrase to get original words
+            String[] originalWords = tokenizer.tokenize(cleanQuery);
+            // Stem the tokens for querying
+            Map<String, String> stemToOriginal = new HashMap<>();
+            Set<String> queryStems = tokenizeAndStem(cleanQuery, stemToOriginal);
+            return QueryIndex.queryPhrase(queryStems, new HashSet<>(Arrays.asList(originalWords)));
         } else {
             // Process as non-phrase query
-            Set<String> queryStems = tokenizeAndStem(query);
+            Map<String, String> stemToOriginal = new HashMap<>();
+            Set<String> queryStems = tokenizeAndStem(query, stemToOriginal);
             System.out.println("QP: Processing word query with stems: " + queryStems);
-            return QueryIndex.queryWords(queryStems);
+            return QueryIndex.queryWords(queryStems, stemToOriginal);
         }
     }
 
-    private List<QueryIndex.DocumentData> processSingleQuery(String query) throws SQLException {
-        QueryIndex.QueryResult result = processQueryComponent(query);
-        return result.documents;
+    private QueryIndex.QueryResult processSingleQuery(String query) throws SQLException {
+        return processQueryComponent(query);
     }
 
     private List<QueryIndex.DocumentData> intersectDocuments(
@@ -119,20 +152,26 @@ public class QP {
 
     private List<QueryIndex.DocumentData> unionDocuments(
             List<QueryIndex.DocumentData> leftDocs, List<QueryIndex.DocumentData> rightDocs) {
-        Set<Integer> docIds = new HashSet<>();
-        List<QueryIndex.DocumentData> result = new ArrayList<>();
+        Map<Integer, QueryIndex.DocumentData> resultMap = new HashMap<>();
 
         for (QueryIndex.DocumentData doc : leftDocs) {
-            if (docIds.add(doc.getDocId())) {
-                result.add(doc);
-            }
+            resultMap.put(doc.getDocId(), doc);
         }
         for (QueryIndex.DocumentData doc : rightDocs) {
-            if (docIds.add(doc.getDocId())) {
-                result.add(doc);
+            if (!resultMap.containsKey(doc.getDocId())) {
+                resultMap.put(doc.getDocId(), doc);
+            } else {
+                // Merge wordInfo for OR operation
+                Map<String, List<Double>> mergedWordInfo = new HashMap<>(resultMap.get(doc.getDocId()).getWordInfo());
+                mergedWordInfo.putAll(doc.getWordInfo());
+
+                resultMap.put(doc.getDocId(), new QueryIndex.DocumentData(
+                        doc.getDocId(),
+                        mergedWordInfo
+                ));
             }
         }
-        return result;
+        return new ArrayList<>(resultMap.values());
     }
 
     private List<QueryIndex.DocumentData> differenceDocuments(
@@ -165,18 +204,22 @@ public class QP {
         return input != null && input.startsWith("\"") && input.endsWith("\"");
     }
 
-    public Set<String> tokenizeAndStem(String text) {
+    public Set<String> tokenizeAndStem(String text, Map<String, String> stemToOriginal) {
         if (text == null || text.trim().isEmpty()) {
             return new HashSet<>();
         }
-        String[] tokens = text.toLowerCase().split("\\s+");
+        // Use OpenNLP tokenizer
+        String[] tokens = tokenizer.tokenize(text);
         Set<String> stems = new HashSet<>();
         Stemmer stemmer = new Stemmer();
         for (String token : tokens) {
             if (!token.isEmpty()) {
-                stemmer.add(token.toCharArray(), token.length());
+                String lowerToken = token.toLowerCase();
+                stemmer.add(lowerToken.toCharArray(), lowerToken.length());
                 stemmer.stem();
-                stems.add(stemmer.toString());
+                String stem = stemmer.toString();
+                stems.add(stem);
+                stemToOriginal.put(stem, token); // Map stem to original token (preserving case)
             }
         }
         return stems;

@@ -29,7 +29,7 @@ public class SearchController {
             @RequestParam String query,
             @RequestParam(required = false, defaultValue = "0") int page,
             @RequestParam(required = false, defaultValue = "10") int size) {
-        
+
         if (query == null || query.trim().isEmpty()) {
             return ResponseEntity.badRequest().build();
         }
@@ -49,4 +49,4 @@ public class SearchController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
     }
-} 
+}
