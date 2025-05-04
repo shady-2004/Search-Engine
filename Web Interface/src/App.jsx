@@ -33,6 +33,7 @@ function App() {
         throw new Error('Search failed')
       }
       const data = await response.json()
+      console.log('Backend search response:', data)
       setResults(data.results || [])
       setTotalResults(data.totalCount || 0)
       setSearchTime(performance.now() - startTime)
@@ -47,7 +48,6 @@ function App() {
   const changePage = async (delta) => {
     const newPage = page + delta
     if (newPage < 0) return
-    if ((newPage + 1) * pageSize >= totalResults) return
 
     setLoading(true)
     try {
@@ -58,8 +58,13 @@ function App() {
         throw new Error('Failed to fetch results')
       }
       const data = await response.json()
+      console.log('Backend page change response:', data)
+      
+      // Always update the page and results, even if we get fewer results than pageSize
       setResults(data.results || [])
       setPage(newPage)
+      setTotalResults(data.totalCount || 0)
+      
       window.scrollTo({
         top: 0,
         behavior: 'smooth'
@@ -106,7 +111,6 @@ function App() {
 
   useEffect(() => {
     const handleClickOutside = (e) => {
-      console.log('Click outside detected')
       if (!e.target.closest('.search-container')) {
         setShowSuggestions(false)
       }
