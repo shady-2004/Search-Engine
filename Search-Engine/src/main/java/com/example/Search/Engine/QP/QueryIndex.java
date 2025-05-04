@@ -351,7 +351,7 @@ public class QueryIndex {
             positionLists.add(positions); // Already sorted by SQL query
         }
 
-        // Maximum allowed gap between words (adjust this value as needed)
+        // Maximum allowed gap between words
         final int MAX_GAP = 3;
 
         // Check sequentiality for each starting position of the first word
@@ -359,18 +359,22 @@ public class QueryIndex {
         for (int startPos : firstPositions) {
             boolean valid = true;
             int currentPos = startPos;
+            int currentWordIndex = 0;
 
             // Verify that subsequent words appear in sequence
-            for (int i = 1; i < words.size(); i++) {
-                List<Integer> positions = positionLists.get(i);
+            while (currentWordIndex < words.size() - 1) {
+                currentWordIndex++;
+                List<Integer> positions = positionLists.get(currentWordIndex);
                 boolean foundNext = false;
 
                 // Look for the next word within the allowed gap
                 for (int pos : positions) {
                     if (pos > currentPos && pos <= currentPos + MAX_GAP) {
-                        currentPos = pos;
-                        foundNext = true;
-                        break;
+                        // Check if this position is better than any previous matches
+                        if (!foundNext || pos < currentPos + MAX_GAP) {
+                            currentPos = pos;
+                            foundNext = true;
+                        }
                     }
                 }
 

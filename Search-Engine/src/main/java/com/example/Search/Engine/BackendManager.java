@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import java.sql.*;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.regex.Pattern;
 
 @Component
 public class BackendManager {
@@ -128,23 +129,37 @@ public class BackendManager {
                         String html = rs.getString("html");
                         if (html != null && !html.isEmpty()) {
                             // Clean HTML and extract text content
-                            String text = html.replaceAll("<script[^>]*>.*?</script>", " ") // Remove scripts
-                                            .replaceAll("<style[^>]*>.*?</style>", " ") // Remove styles
-                                            .replaceAll("<[^>]*>", " ") // Remove other HTML tags
-                                            .replaceAll("&nbsp;", " ") // Replace HTML entities
-                                            .replaceAll("&[^;]+;", " ")
-                                            .replaceAll("\\s+", " ") // Normalize whitespace
-                                            .replaceAll("[\\p{Cntrl}&&[^\n\t]]", "") // Remove control chars except newline/tab
-                                            .replaceAll("\\s*[\\r\\n]+\\s*", " ") // Normalize line breaks
-                                            .replaceAll("\\s*[.,!?]+\\s*", ". ") // Normalize punctuation
-                                            .replaceAll("\\.+", ".") // Fix multiple periods
-                                            .replaceAll("\\s+", " ") // Final whitespace normalization
-                                            .trim();
-                            
+                            String text = html
+                                // Remove scripts (including inline and external)
+                                .replaceAll("(?is)<script\\b[^<]*(?:(?!</script>)<[^<]*)*</script>", " ")
+                                // Remove styles (including inline and external)
+                                .replaceAll("(?is)<style\\b[^<]*(?:(?!</style>)<[^<]*)*</style>", " ")
+                                // Remove HTML comments
+                                .replaceAll("(?s)<!--.*?-->", " ")
+                                // Remove all remaining HTML tags
+                                .replaceAll("<[^>]+>", " ")
+                                // Decode common HTML entities
+                                .replaceAll("&nbsp;|[\\u00A0]", " ")
+                                .replaceAll("&amp;", "&")
+                                .replaceAll("&lt;", "<")
+                                .replaceAll("&gt;", ">")
+                                .replaceAll("&quot;", "\"")
+                                .replaceAll("&#39;", "'")
+                                .replaceAll("&#[0-9]+;", " ")
+                                // Remove other HTML entities
+                                .replaceAll("&[a-zA-Z0-9#]+;", " ")
+                                // Normalize whitespace and control characters
+                                .replaceAll("[\\p{Cntrl}&&[^\n\t]]", "")
+                                .replaceAll("\\s*[\\r\\n]+\\s*", " ")
+                                .replaceAll("\\s*[.,!?]+\\s*", ". ")
+                                .replaceAll("\\.+", ".")
+                                .replaceAll("\\s+", " ")
+                                .trim();
+    
                             // Find the best position to start the snippet
                             int bestPosition = -1;
                             String bestWord = null;
-                            
+    
                             // First try to find exact word matches in the text
                             for (String word : queryWords) {
                                 int pos = text.toLowerCase().indexOf(word.toLowerCase());
@@ -154,7 +169,7 @@ public class BackendManager {
                                     break;
                                 }
                             }
-                            
+    
                             // If no exact match found, try using wordInfo positions
                             if (bestPosition == -1) {
                                 for (String word : queryWords) {
@@ -171,15 +186,15 @@ public class BackendManager {
                                     }
                                 }
                             }
-                            
+    
                             if (bestPosition == -1) {
                                 return "No preview available for this result.";
                             }
-                            
+    
                             // Find sentence boundaries
                             int startPos = bestPosition;
                             int endPos = bestPosition;
-                            
+    
                             // Look for sentence start (period + space or start of text)
                             while (startPos > 0 && startPos > bestPosition - 150) {
                                 if (startPos >= 2 && text.substring(startPos - 2, startPos).matches("\\. ")) {
@@ -188,7 +203,7 @@ public class BackendManager {
                                 }
                                 startPos--;
                             }
-                            
+    
                             // Look for sentence end (period + space or end of text)
                             while (endPos < text.length() && endPos < bestPosition + 150) {
                                 if (endPos + 2 <= text.length() && text.substring(endPos, endPos + 2).matches("\\. ")) {
@@ -197,18 +212,18 @@ public class BackendManager {
                                 }
                                 endPos++;
                             }
-                            
+    
                             // Ensure we don't exceed text boundaries
                             startPos = Math.max(0, startPos);
                             endPos = Math.min(text.length(), endPos);
-                            
+    
                             StringBuilder snippet = new StringBuilder();
                             if (startPos > 0) {
                                 snippet.append("...");
                             }
-                            
+    
                             String snippetText = text.substring(startPos, endPos).trim();
-                            
+    
                             // Verify the snippet contains at least one query word
                             boolean containsQueryWord = false;
                             for (String word : queryWords) {
@@ -217,36 +232,37 @@ public class BackendManager {
                                     break;
                                 }
                             }
-                            
+    
                             if (!containsQueryWord) {
                                 // If no query word in snippet, expand the snippet
                                 startPos = Math.max(0, bestPosition - 100);
                                 endPos = Math.min(text.length(), bestPosition + 100);
                                 snippetText = text.substring(startPos, endPos).trim();
                             }
-                            
+    
                             // Clean up the snippet text
-                            snippetText = snippetText.replaceAll("\\s+", " ")
-                                                    .replaceAll("\\s*[.,!?]+\\s*", ". ")
-                                                    .replaceAll("\\.+", ".")
-                                                    .replaceAll("^[^a-zA-Z0-9]+", "") // Remove leading non-alphanumeric
-                                                    .replaceAll("[^a-zA-Z0-9]+$", "") // Remove trailing non-alphanumeric
-                                                    .trim();
-                            
+                            snippetText = snippetText
+                                .replaceAll("\\s+", " ")
+                                .replaceAll("\\s*[.,!?]+\\s*", ". ")
+                                .replaceAll("\\.+", ".")
+                                .replaceAll("^[^a-zA-Z0-9]+", "")
+                                .replaceAll("[^a-zA-Z0-9]+$", "")
+                                .trim();
+    
                             // Highlight query words in the snippet
                             for (String word : queryWords) {
                                 snippetText = snippetText.replaceAll(
-                                    "(?i)\\b" + word + "\\b",
+                                    "(?i)\\b" + Pattern.quote(word) + "\\b",
                                     "<strong>$0</strong>"
                                 );
                             }
-                            
+    
                             snippet.append(snippetText);
-                            
+    
                             if (endPos < text.length()) {
                                 snippet.append("...");
                             }
-                            
+    
                             return snippet.toString();
                         }
                     }
@@ -255,7 +271,6 @@ public class BackendManager {
         } catch (SQLException e) {
             System.err.println("Error generating snippet: " + e.getMessage());
         }
-        
         // Fallback to title-based snippet if content retrieval fails
         return "No preview available for this result.";
     }
