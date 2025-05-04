@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
 public class Crawler {
-    private static final int MAX_PAGES = 6000;
+    private static final int MAX_PAGES = 200;
     private static final int MAX_PAGES_PER_DOMAIN = 5;
     private static final int CHECKPOINT_INTERVAL = 20;
     private static final int MAX_QUEUE_SIZE = 10000;
@@ -367,6 +367,15 @@ public class Crawler {
     }
 
     private void initializeDatabase() {
+        // Create data directory if it doesn't exist
+        File dataDir = new File("data");
+        if (!dataDir.exists()) {
+            if (!dataDir.mkdirs()) {
+                System.err.println("Failed to create data directory");
+                return;
+            }
+        }
+
         try (java.sql.Connection conn = DriverManager.getConnection(DB_URL);
              Statement stmt = conn.createStatement()) {
             stmt.execute("""
@@ -381,7 +390,7 @@ public class Crawler {
             stmt.execute("CREATE TABLE IF NOT EXISTS extracted_links (" +
                     "doc_id INTEGER NOT NULL, " +
                     "extracted_link TEXT NOT NULL, " +
-                    "FOREIGN KEY (doc_id) REFERENCES DocumentMetaData(doc_id) ON DELETE CASCADE)");
+                    "FOREIGN KEY (doc_id) REFERENCES DocumentMetaData(id) ON DELETE CASCADE)");
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_doc_id ON extracted_links(doc_id)");
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_url ON DocumentMetaData(url)");
         } catch (SQLException e) {

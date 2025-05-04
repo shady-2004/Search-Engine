@@ -8,8 +8,8 @@ import org.springframework.http.ResponseEntity;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/suggestions")
-@CrossOrigin(origins = "http://localhost:5173", allowCredentials = "true", methods = {RequestMethod.GET, RequestMethod.OPTIONS})
+@RequestMapping("/api")
+@CrossOrigin(origins = "http://localhost:5173", methods = {RequestMethod.GET, RequestMethod.OPTIONS}, allowedHeaders = "*", allowCredentials = "true")
 public class SearchSuggestionsController {
     private final BackendManager backendManager;
 
@@ -18,7 +18,7 @@ public class SearchSuggestionsController {
         this.backendManager = backendManager;
     }
 
-    @GetMapping
+    @GetMapping("/suggestions")
     public ResponseEntity<List<String>> getSuggestions(@RequestParam String q) {
         if (q == null || q.trim().isEmpty()) {
             return ResponseEntity.badRequest().build();
