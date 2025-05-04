@@ -41,6 +41,7 @@ public class PageRank {
         System.out.println("Execution Time: " + elapsedTime + " milliseconds");
 
         setPageRank(probability);
+        System.out.println(probability);
     }
 
 

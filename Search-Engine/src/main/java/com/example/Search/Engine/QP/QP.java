@@ -36,7 +36,7 @@ public class QP {
 
     public static void main(String[] args) {
         QP qp = new QP();
-        String query = "naruto";
+        String query = "stay";
         try (Connection conn = DriverManager.getConnection(DB_URL)) {
             conn.setAutoCommit(false);
             QueryIndex.QueryResult result = qp.search(query); // Now returns QueryResult
@@ -46,8 +46,9 @@ public class QP {
             if (result.documents.isEmpty()) {
                 System.out.println("No documents found.");
             } else {
-                List<Integer> ranked = Ranker.rank(result.documents, result.queryWords);
+                List<Map.Entry<Integer, Double>> ranked = Ranker.rank(result.documents, result.queryWords);
                 System.out.println(ranked);
+                System.out.println(result.documents);
             }
         } catch (SQLException e) {
             System.err.println("Database error: " + e.getMessage());

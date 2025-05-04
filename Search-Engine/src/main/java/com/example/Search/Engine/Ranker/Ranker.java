@@ -2,11 +2,14 @@ package com.example.Search.Engine.Ranker;
 
 import com.example.Search.Engine.QP.QueryIndex;
 
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+
+import static com.example.Search.Engine.Data.DataBaseManager.getPageRank;
 
 public class Ranker {
     static final int THREADS = 10;
@@ -26,7 +29,7 @@ public class Ranker {
                 double idf = info.get(1); // IDF
                 tfidfScore += tf * idf;
             }
-            // If term not found, tf * idf = 0, so skip
+
         }
 
         double pageRank = docData.getPageRank(); // Use getter for pageRank
@@ -35,18 +38,24 @@ public class Ranker {
     }
 
     // Overload rank method to accept List<String>
-    public static List<Integer> rank(List<QueryIndex.DocumentData> documents, List<String> queryTerms) throws InterruptedException {
+    public static  List<Map.Entry<Integer, Double>> rank(List<QueryIndex.DocumentData> documents, List<String> queryTerms) throws InterruptedException {
         return rankDocuments(documents, queryTerms);
     }
 
     // Overload rank method to accept Set<String>
-    public static List<Integer> rank(List<QueryIndex.DocumentData> documents, Set<String> queryTerms) throws InterruptedException {
+    public static List<Map.Entry<Integer, Double>> rank(List<QueryIndex.DocumentData> documents, Set<String> queryTerms) throws InterruptedException {
         return rankDocuments(documents, new ArrayList<>(queryTerms));
     }
 
-    private static List<Integer> rankDocuments(List<QueryIndex.DocumentData> documents, List<String> queryTerms) throws InterruptedException {
+    private static List<Map.Entry<Integer, Double>> rankDocuments(List<QueryIndex.DocumentData> documents, List<String> queryTerms) throws InterruptedException {
         ConcurrentHashMap<Integer, Double> results = new ConcurrentHashMap<>();
-        List<Integer> rankedDocs = new ArrayList<>();
+
+        // Fetch PageRank values for all documents before scoring
+        try {
+            getPageRank(documents);
+        } catch (SQLException e) {
+            throw new RuntimeException("Failed to fetch PageRank values", e);
+        }
 
         if (documents.size() < THREADING_THRESHOLD) {
             // Single-threaded processing
@@ -66,12 +75,7 @@ public class Ranker {
         List<Map.Entry<Integer, Double>> sortedDocs = new ArrayList<>(results.entrySet());
         sortedDocs.sort((d1, d2) -> d2.getValue().compareTo(d1.getValue()));
 
-        // Extract docIds in ranked order
-        for (Map.Entry<Integer, Double> entry : sortedDocs) {
-            rankedDocs.add(entry.getKey());
-        }
-
-        return rankedDocs;
+        return sortedDocs;
     }
 
     private static List<RankParallel> getRankParallels(List<QueryIndex.DocumentData> documents, List<String> queryTerms, ConcurrentHashMap<Integer, Double> results) {
