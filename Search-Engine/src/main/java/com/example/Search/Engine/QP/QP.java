@@ -46,8 +46,7 @@ public class QP {
             if (result.documents.isEmpty()) {
                 System.out.println("No documents found.");
             } else {
-                Ranker rank= new Ranker();
-              List<Integer> ranked= rank.rank(result.documents,result.queryWords);
+                List<Integer> ranked = Ranker.rank(result.documents, result.queryWords);
                 System.out.println(ranked);
             }
         } catch (SQLException e) {
