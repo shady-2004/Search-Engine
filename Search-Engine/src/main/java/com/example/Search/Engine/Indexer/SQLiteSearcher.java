@@ -8,10 +8,16 @@ import org.springframework.stereotype.Component;
 @Component
 public class SQLiteSearcher implements AutoCloseable {
     private final Connection connection;
-    private static final double TITLE_WEIGHT = 3.0;
-    private static final double H1_WEIGHT = 2.0;
-    private static final double H2_WEIGHT = 1.5;
-    private static final double CONTENT_WEIGHT = 1.0;
+    private final ThreadLocal<Connection> threadLocalConnection = new ThreadLocal<>();
+    private final Object connectionLock = new Object();
+    private static final double TITLE_WEIGHT = 5.0;    // Most important - page title
+    private static final double H1_WEIGHT = 4.0;       // Main heading
+    private static final double H2_WEIGHT = 3.0;       // Sub-heading
+    private static final double H3_WEIGHT = 2.5;       // Sub-sub-heading
+    private static final double H4_WEIGHT = 2.0;       // Minor heading
+    private static final double H5_WEIGHT = 1.8;       // Minor heading
+    private static final double H6_WEIGHT = 1.5;       // Minor heading
+    private static final double CONTENT_WEIGHT = 1.0;  // Regular content
 
     public static class SearchResult {
         private final String url;
@@ -38,9 +44,7 @@ public class SQLiteSearcher implements AutoCloseable {
     }
 
     public SQLiteSearcher() throws SQLException {
-        String dbPath = "jdbc:sqlite:data/search_index.db";
-        connection = DriverManager.getConnection(dbPath);
-        connection.setAutoCommit(false);
+        connection = getThreadConnection();
         initializeDatabase();
     }
 
@@ -72,7 +76,8 @@ public class SQLiteSearcher implements AutoCloseable {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 index_id INTEGER NOT NULL,
                 position INTEGER NOT NULL,
-                FOREIGN KEY (index_id) REFERENCES InvertedIndex(id)
+                FOREIGN KEY (index_id) REFERENCES InvertedIndex(id),
+                UNIQUE(index_id, position)
             )
         """;
 
@@ -92,116 +97,253 @@ public class SQLiteSearcher implements AutoCloseable {
     }
 
     public void addDocuments(List<Map.Entry<String, Map<String, Tokenizer.Token>>> documents) {
+        int batchSize = 1000;
+        int totalBatches = (documents.size() + batchSize - 1) / batchSize;
+        
+        for (int batchNum = 0; batchNum < totalBatches; batchNum++) {
+            int start = batchNum * batchSize;
+            int end = Math.min(start + batchSize, documents.size());
+            List<Map.Entry<String, Map<String, Tokenizer.Token>>> currentBatch = documents.subList(start, end);
+            
+            System.out.println("Processing batch " + (batchNum + 1) + " of " + totalBatches + " (" + currentBatch.size() + " documents)");
+            
+            try {
+                // Process this batch
+                processBatch(currentBatch);
+                
+                // Clear references to allow garbage collection
+                currentBatch = null;
+                System.gc(); // Suggest garbage collection
+                
+            } catch (SQLException e) {
+                System.err.println("SQL Error in batch " + (batchNum + 1) + ": " + e.getMessage());
+                e.printStackTrace();
+                throw new RuntimeException("Error processing batch " + (batchNum + 1) + ": " + e.getMessage(), e);
+            } catch (Exception e) {
+                System.err.println("Unexpected error in batch " + (batchNum + 1) + ": " + e.getMessage());
+                e.printStackTrace();
+                throw new RuntimeException("Unexpected error in batch " + (batchNum + 1) + ": " + e.getMessage(), e);
+            }
+        }
+        
+        // Update IDF once after all batches are processed
         try {
-            Map<String, Long> urlToDocId = new ConcurrentHashMap<>();
-            String getDocId = "SELECT id FROM DocumentMetaData WHERE url = ?";
-            String insertDoc = "INSERT INTO DocumentMetaData (url, title) VALUES (?, ?)";
-            
-            int processors = Runtime.getRuntime().availableProcessors();
-            ExecutorService executor = Executors.newFixedThreadPool(processors);
-            List<CompletableFuture<Void>> idFutures = new ArrayList<>();
-            
-            for (Map.Entry<String, Map<String, Tokenizer.Token>> doc : documents) {
-                CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
-                    try {
-                        String url = doc.getKey();
-                        try (PreparedStatement getStmt = threadLocalConnection.get().prepareStatement(getDocId);
-                             PreparedStatement insertStmt = threadLocalConnection.get().prepareStatement(insertDoc, Statement.RETURN_GENERATED_KEYS)) {
-                            
-                            getStmt.setString(1, url);
-                            try (ResultSet rs = getStmt.executeQuery()) {
-                                if (rs.next()) {
-                                    urlToDocId.put(url, rs.getLong(1));
-                                } else {
-                                    insertStmt.setString(1, url);
-                                    insertStmt.setString(2, url);
-                                    insertStmt.executeUpdate();
-                                    
-                                    try (ResultSet generatedKeys = insertStmt.getGeneratedKeys()) {
-                                        if (generatedKeys.next()) {
-                                            urlToDocId.put(url, generatedKeys.getLong(1));
-                                        }
+            System.out.println("Updating IDF for all words...");
+            updateIDF();
+        } catch (SQLException e) {
+            System.err.println("Error updating IDF: " + e.getMessage());
+            e.printStackTrace();
+            throw new RuntimeException("Error updating IDF: " + e.getMessage(), e);
+        }
+    }
+    
+    private void processBatch(List<Map.Entry<String, Map<String, Tokenizer.Token>>> batch) throws SQLException {
+        if (batch == null || batch.isEmpty()) {
+            throw new SQLException("Batch is null or empty");
+        }
+
+        Map<String, Long> urlToDocId = new ConcurrentHashMap<>();
+        int processors = Runtime.getRuntime().availableProcessors();
+        ExecutorService executor = Executors.newFixedThreadPool(processors);
+        List<CompletableFuture<Void>> idFutures = new ArrayList<>();
+        
+        // Process document IDs
+        String getDocId = "SELECT id FROM DocumentMetaData WHERE url = ?";
+        String insertDoc = "INSERT INTO DocumentMetaData (url, title) VALUES (?, ?)";
+        
+        for (Map.Entry<String, Map<String, Tokenizer.Token>> doc : batch) {
+            if (doc == null || doc.getKey() == null) {
+                throw new SQLException("Invalid document entry in batch");
+            }
+
+            final String url = doc.getKey();
+            System.out.println("Processing URL: " + url);
+
+            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+                Connection conn = null;
+                try {
+                    conn = getThreadConnection();
+                    conn.setAutoCommit(false); // Ensure we're in transaction mode
+                    
+                    try (PreparedStatement getStmt = conn.prepareStatement(getDocId);
+                         PreparedStatement insertStmt = conn.prepareStatement(insertDoc, Statement.RETURN_GENERATED_KEYS)) {
+                        
+                        // Try to get existing document ID
+                        getStmt.setString(1, url);
+                        try (ResultSet rs = getStmt.executeQuery()) {
+                            if (rs.next()) {
+                                long existingId = rs.getLong(1);
+                                System.out.println("Found existing document ID " + existingId + " for URL: " + url);
+                                urlToDocId.put(url, existingId);
+                            } else {
+                                // Insert new document
+                                System.out.println("Inserting new document for URL: " + url);
+                                insertStmt.setString(1, url);
+                                insertStmt.setString(2, url);
+                                int affectedRows = insertStmt.executeUpdate();
+                                
+                                if (affectedRows == 0) {
+                                    throw new SQLException("Failed to insert document for URL: " + url);
+                                }
+                                
+                                try (ResultSet generatedKeys = insertStmt.getGeneratedKeys()) {
+                                    if (generatedKeys.next()) {
+                                        long newId = generatedKeys.getLong(1);
+                                        System.out.println("Created new document ID " + newId + " for URL: " + url);
+                                        urlToDocId.put(url, newId);
+                                    } else {
+                                        throw new SQLException("Failed to get generated key for URL: " + url);
                                     }
                                 }
                             }
                         }
+                        conn.commit();
                     } catch (SQLException e) {
-                        throw new RuntimeException("Error processing document ID: " + e.getMessage(), e);
+                        if (conn != null) {
+                            conn.rollback();
+                        }
+                        throw e;
                     }
-                }, executor);
-                idFutures.add(future);
-            }
-            
+                } catch (SQLException e) {
+                    System.err.println("SQL Error processing URL " + url + ": " + e.getMessage());
+                    if (conn != null) {
+                        try {
+                            conn.rollback();
+                        } catch (SQLException rollbackError) {
+                            System.err.println("Rollback failed for URL " + url + ": " + rollbackError.getMessage());
+                        }
+                    }
+                    throw new RuntimeException("Error processing document ID for URL " + url + ": " + e.getMessage(), e);
+                } finally {
+                    if (conn != null) {
+                        try {
+                            conn.close();
+                        } catch (SQLException e) {
+                            System.err.println("Error closing connection for URL " + url + ": " + e.getMessage());
+                        }
+                    }
+                }
+            }, executor);
+            idFutures.add(future);
+        }
+        
+        // Wait for all document IDs to be processed
+        try {
             CompletableFuture.allOf(idFutures.toArray(new CompletableFuture[0])).join();
-            executor.shutdown();
-            try {
-                if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
-                    executor.shutdownNow();
-                }
-            } catch (InterruptedException e) {
+        } catch (Exception e) {
+            executor.shutdownNow();
+            throw new SQLException("Error waiting for document ID processing: " + e.getMessage(), e);
+        }
+        
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
                 executor.shutdownNow();
-                Thread.currentThread().interrupt();
-                throw new RuntimeException("Interrupted while waiting for document ID processing", e);
             }
+        } catch (InterruptedException e) {
+            executor.shutdownNow();
+            Thread.currentThread().interrupt();
+            throw new SQLException("Interrupted while waiting for document ID processing", e);
+        }
 
-            for (Map.Entry<String, Map<String, Tokenizer.Token>> doc : documents) {
-                if (!urlToDocId.containsKey(doc.getKey())) {
-                    throw new RuntimeException("Failed to get or create document ID for URL: " + doc.getKey());
-                }
+        // Verify all documents have IDs
+        for (Map.Entry<String, Map<String, Tokenizer.Token>> doc : batch) {
+            String url = doc.getKey();
+            if (!urlToDocId.containsKey(url)) {
+                System.err.println("Failed to get or create document ID for URL: " + url);
+                System.err.println("Current URL to ID mapping: " + urlToDocId);
+                throw new SQLException("Failed to get or create document ID for URL: " + url);
             }
-
+        }
+        
+        // Process tokens and positions in smaller sub-batches
+        int subBatchSize = 100; // Process 100 documents at a time for tokens and positions
+        for (int i = 0; i < batch.size(); i += subBatchSize) {
+            int end = Math.min(i + subBatchSize, batch.size());
+            List<Map.Entry<String, Map<String, Tokenizer.Token>>> subBatch = batch.subList(i, end);
+            
+            // Process tokens
             String insertToken = """
                 INSERT INTO InvertedIndex (word, doc_id, frequency, importance)
                 VALUES (?, ?, ?, ?)
             """;
             
-            try (PreparedStatement pstmt = connection.prepareStatement(insertToken)) {
-                for (Map.Entry<String, Map<String, Tokenizer.Token>> doc : documents) {
+            Map<String, Long> wordToIndexId = new HashMap<>();
+            try (PreparedStatement pstmt = getThreadConnection().prepareStatement(insertToken, Statement.RETURN_GENERATED_KEYS)) {
+                for (Map.Entry<String, Map<String, Tokenizer.Token>> doc : subBatch) {
                     Long docId = urlToDocId.get(doc.getKey());
+                    if (docId == null) {
+                        throw new SQLException("Document ID is null for URL: " + doc.getKey());
+                    }
                     
                     for (Tokenizer.Token token : doc.getValue().values()) {
                         pstmt.setString(1, token.getWord());
                         pstmt.setLong(2, docId);
                         pstmt.setDouble(3, token.getCount());
                         pstmt.setDouble(4, getPositionWeight(token.getPosition()));
-                        pstmt.addBatch();
-                    }
-                }
-                
-                pstmt.executeBatch();
-            }
-
-            String insertPosition = """
-                INSERT INTO WordPositions (index_id, position)
-                VALUES (?, ?)
-            """;
-            
-            try (PreparedStatement pstmt = connection.prepareStatement(insertPosition)) {
-                for (Map.Entry<String, Map<String, Tokenizer.Token>> doc : documents) {
-                    Long docId = urlToDocId.get(doc.getKey());
-                    
-                    for (Tokenizer.Token token : doc.getValue().values()) {
-                        for (Integer position : token.getPositions()) {
-                            pstmt.setLong(1, docId);
-                            pstmt.setInt(2, position);
-                            pstmt.addBatch();
+                        pstmt.executeUpdate();
+                        
+                        try (ResultSet generatedKeys = pstmt.getGeneratedKeys()) {
+                            if (generatedKeys.next()) {
+                                wordToIndexId.put(token.getWord() + "_" + docId, generatedKeys.getLong(1));
+                            } else {
+                                throw new SQLException("Failed to get generated key for word: " + token.getWord());
+                            }
                         }
                     }
                 }
-                
-                pstmt.executeBatch();
             }
 
-            connection.commit();
-            updateIDF();
-        } catch (SQLException e) {
-            try {
-                connection.rollback();
-            } catch (SQLException rollbackError) {
-                throw new RuntimeException("Error during rollback: " + rollbackError.getMessage(), rollbackError);
+            // Process positions in even smaller batches
+            String insertPosition = """
+                INSERT OR IGNORE INTO WordPositions (index_id, position)
+                VALUES (?, ?)
+            """;
+            
+            try (PreparedStatement pstmt = getThreadConnection().prepareStatement(insertPosition)) {
+                int positionBatchSize = 0;
+                for (Map.Entry<String, Map<String, Tokenizer.Token>> doc : subBatch) {
+                    Long docId = urlToDocId.get(doc.getKey());
+                    if (docId == null) {
+                        throw new SQLException("Document ID is null for URL: " + doc.getKey());
+                    }
+                    
+                    for (Tokenizer.Token token : doc.getValue().values()) {
+                        Long indexId = wordToIndexId.get(token.getWord() + "_" + docId);
+                        if (indexId == null) {
+                            throw new SQLException("Index ID is null for word: " + token.getWord());
+                        }
+                        
+                        for (Integer position : token.getPositions()) {
+                            pstmt.setLong(1, indexId);
+                            pstmt.setInt(2, position);
+                            pstmt.addBatch();
+                            positionBatchSize++;
+                            
+                            if (positionBatchSize >= 1000) {
+                                pstmt.executeBatch();
+                                positionBatchSize = 0;
+                            }
+                        }
+                    }
+                }
+                if (positionBatchSize > 0) {
+                    pstmt.executeBatch();
+                }
             }
-            throw new RuntimeException("Error adding documents to database", e);
+
+            // Clear references for this sub-batch
+            wordToIndexId.clear();
+            subBatch = null;
+            System.gc();
         }
+
+        getThreadConnection().commit();
+        
+        // Clear all references
+        urlToDocId.clear();
+        batch = null;
+        System.gc();
     }
 
     public void updateIDF() throws SQLException {
@@ -235,7 +377,7 @@ public class SQLiteSearcher implements AutoCloseable {
              ResultSet rs = stmt.executeQuery(getWordCounts);
              PreparedStatement updateStmt = connection.prepareStatement(updateIDF)) {
             
-            int batchSize = 1000; // Process 1000 words at a time
+            int batchSize = 10000; // Increased batch size for IDF updates
             int count = 0;
             int totalUpdated = 0;
             
@@ -275,6 +417,10 @@ public class SQLiteSearcher implements AutoCloseable {
             case "title" -> TITLE_WEIGHT;
             case "h1" -> H1_WEIGHT;
             case "h2" -> H2_WEIGHT;
+            case "h3" -> H3_WEIGHT;
+            case "h4" -> H4_WEIGHT;
+            case "h5" -> H5_WEIGHT;
+            case "h6" -> H6_WEIGHT;
             default -> CONTENT_WEIGHT;
         };
     }
@@ -298,6 +444,18 @@ public class SQLiteSearcher implements AutoCloseable {
 
     public Connection getConnection() {
         return connection;
+    }
+
+    private Connection getThreadConnection() throws SQLException {
+        Connection conn = threadLocalConnection.get();
+        if (conn == null || conn.isClosed()) {
+            synchronized (connectionLock) {
+                conn = DriverManager.getConnection("jdbc:sqlite:data/search_index.db");
+                conn.setAutoCommit(false);
+                threadLocalConnection.set(conn);
+            }
+        }
+        return conn;
     }
 
     @Override

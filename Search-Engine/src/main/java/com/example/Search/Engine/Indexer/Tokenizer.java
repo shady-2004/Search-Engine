@@ -11,6 +11,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import com.example.Search.Engine.QP.Stemmer;
+import java.util.stream.IntStream;
 
 //Component responsible for tokenizing text and HTML documents.
 //Handles stopword removal, word validation, and position-based weighting.
@@ -22,10 +23,14 @@ public class Tokenizer {
     private static final int MAX_WORD_LENGTH = 45;
     
     // Position weights
-    public static final double TITLE_WEIGHT = 3.0;
-    public static final double H1_WEIGHT = 2.0;
-    public static final double H2_WEIGHT = 1.5;
-    public static final double CONTENT_WEIGHT = 1.0;
+    public static final double TITLE_WEIGHT = 5.0;    // Most important - page title
+    public static final double H1_WEIGHT = 4.0;       // Main heading
+    public static final double H2_WEIGHT = 3.0;       // Sub-heading
+    public static final double H3_WEIGHT = 2.5;       // Sub-sub-heading
+    public static final double H4_WEIGHT = 2.0;       // Minor heading
+    public static final double H5_WEIGHT = 1.8;       // Minor heading
+    public static final double H6_WEIGHT = 1.5;       // Minor heading
+    public static final double CONTENT_WEIGHT = 1.0;  // Regular content
 
     public static class Token {
         private final String word;
@@ -96,12 +101,11 @@ public class Tokenizer {
     //Tokenizes a string into a list of words.
     public List<String> tokenizeString(String text, boolean removeStopWords) {
         List<String> tokens = new ArrayList<>();
+
         var matcher = wordPattern.matcher(text.toLowerCase());
-        
         while (matcher.find()) {
             String word = matcher.group();
             if (isValidWord(word, removeStopWords)) {
-                // Create a new Stemmer instance for each word
                 Stemmer stemmer = new Stemmer();
                 stemmer.add(word.toCharArray(), word.length());
                 stemmer.stem();
@@ -114,6 +118,7 @@ public class Tokenizer {
     private boolean isValidWord(String word, boolean removeStopWords) {
         return word.length() >= MIN_WORD_LENGTH && 
             word.length() <= MAX_WORD_LENGTH &&
+            word.matches("^[a-zA-Z]+$") && // Only allow letters, no apostrophes
             (!removeStopWords || !stopWords.contains(word));
     }
 
@@ -130,33 +135,24 @@ public class Tokenizer {
             }
         });
 
-        CompletableFuture<Void> h1Future = CompletableFuture.runAsync(() -> {
-            Elements h1s = doc.select("h1");
-            if (!h1s.isEmpty()) {
-                h1s.parallelStream().forEach(h1 -> {
-                    String text = h1.text();
-                    if (!text.isEmpty()) {
-                        processText(text, tokens, "h1");
-                        totalTokens.addAndGet(countTokens(text));
-                    }
-                });
-            }
-        });
-
-        CompletableFuture<Void> h2Future = CompletableFuture.runAsync(() -> {
-            Elements h2s = doc.select("h2");
-            if (!h2s.isEmpty()) {
-                h2s.parallelStream().forEach(h2 -> {
-                    String text = h2.text();
-                    if (!text.isEmpty()) {
-                        processText(text, tokens, "h2");
-                        totalTokens.addAndGet(countTokens(text));
-                    }
-                });
-            }
+        CompletableFuture<Void> headersFuture = CompletableFuture.runAsync(() -> {
+            // Process all header levels
+            IntStream.rangeClosed(1, 6).forEach(i -> {
+                Elements headers = doc.select("h" + i);
+                if (!headers.isEmpty()) {
+                    headers.parallelStream().forEach(header -> {
+                        String text = header.text();
+                        if (!text.isEmpty()) {
+                            processText(text, tokens, "h" + i);
+                            totalTokens.addAndGet(countTokens(text));
+                        }
+                    });
+                }
+            });
         });
 
         CompletableFuture<Void> contentFuture = CompletableFuture.runAsync(() -> {
+            // Process paragraphs
             Elements paragraphs = doc.select("p");
             if (!paragraphs.isEmpty()) {
                 paragraphs.parallelStream().forEach(p -> {
@@ -167,9 +163,57 @@ public class Tokenizer {
                     }
                 });
             }
+
+            // Process divs with text content
+            Elements divs = doc.select("div");
+            if (!divs.isEmpty()) {
+                divs.parallelStream().forEach(div -> {
+                    String text = div.text();
+                    if (!text.isEmpty()) {
+                        processText(text, tokens, "content");
+                        totalTokens.addAndGet(countTokens(text));
+                    }
+                });
+            }
+
+            // Process list items
+            Elements listItems = doc.select("li");
+            if (!listItems.isEmpty()) {
+                listItems.parallelStream().forEach(li -> {
+                    String text = li.text();
+                    if (!text.isEmpty()) {
+                        processText(text, tokens, "content");
+                        totalTokens.addAndGet(countTokens(text));
+                    }
+                });
+            }
+
+            // Process spans
+            Elements spans = doc.select("span");
+            if (!spans.isEmpty()) {
+                spans.parallelStream().forEach(span -> {
+                    String text = span.text();
+                    if (!text.isEmpty()) {
+                        processText(text, tokens, "content");
+                        totalTokens.addAndGet(countTokens(text));
+                    }
+                });
+            }
+
+            // Process articles and sections
+            Elements articles = doc.select("article, section");
+            if (!articles.isEmpty()) {
+                articles.parallelStream().forEach(article -> {
+                    String text = article.text();
+                    if (!text.isEmpty()) {
+                        processText(text, tokens, "content");
+                        totalTokens.addAndGet(countTokens(text));
+                    }
+                });
+            }
         });
 
-        CompletableFuture.allOf(titleFuture, h1Future, h2Future, contentFuture).join();
+        CompletableFuture.allOf(titleFuture, headersFuture, contentFuture).join();
 
         int finalTotalTokens = totalTokens.get();
         if (finalTotalTokens > 0) {
@@ -186,16 +230,18 @@ public class Tokenizer {
             return;
         }
         
+        double positionWeight = getPositionWeight(position);
+        
         for (int i = 0; i < words.size(); i++) {
             final int positionIndex = i;
             String word = words.get(i);
             tokens.compute(word, (key, existingToken) -> {
                 if (existingToken == null) {
-                    Token newToken = new Token(word, 1.0, position);
+                    Token newToken = new Token(word, positionWeight, position);
                     newToken.addPosition(positionIndex);
                     return newToken;
                 } else {
-                    existingToken.setCount(existingToken.getCount() + 1.0);
+                    existingToken.setCount(existingToken.getCount() + positionWeight);
                     existingToken.addPosition(positionIndex);
                     if (getPositionWeight(position) > getPositionWeight(existingToken.getPosition())) {
                         existingToken.setPosition(position);
@@ -217,6 +263,10 @@ public class Tokenizer {
             case "title" -> TITLE_WEIGHT;
             case "h1" -> H1_WEIGHT;
             case "h2" -> H2_WEIGHT;
+            case "h3" -> H3_WEIGHT;
+            case "h4" -> H4_WEIGHT;
+            case "h5" -> H5_WEIGHT;
+            case "h6" -> H6_WEIGHT;
             default -> CONTENT_WEIGHT;
         };
     }
