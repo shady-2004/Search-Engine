@@ -113,7 +113,6 @@ public class SQLiteSearcher implements AutoCloseable {
                 
                 // Clear references to allow garbage collection
                 currentBatch = null;
-                System.gc(); // Suggest garbage collection
                 
             } catch (SQLException e) {
                 System.err.println("SQL Error in batch " + (batchNum + 1) + ": " + e.getMessage());
