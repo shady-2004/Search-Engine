@@ -125,7 +125,7 @@ public class QueryIndex {
         }
 
         List<DocumentData> documentDataList = new ArrayList<>();
-        Map<Integer, Map<String, List<Double>>> docWordInfo = new HashMap<>();
+        //Map<Integer, Map<String, List<Double>>> docWordInfo = new HashMap<>();
         List<String> queryWords = new ArrayList<>(originalWords); // Collect original words
 
         // Step 1: Query InvertedIndex to get documents containing all words
