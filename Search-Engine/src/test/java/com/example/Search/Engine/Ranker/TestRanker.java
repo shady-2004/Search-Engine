@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 public class TestRanker {
+    private final Ranker ranker = new Ranker();
 
     @Test
     void testRanker() throws InterruptedException {
@@ -20,7 +21,7 @@ public class TestRanker {
         List<String> queryTerms = new ArrayList<>();
 
         // act
-        List<Map.Entry<Integer, Double>> rankedEntries = Ranker.rank(documents, queryTerms);
+        List<Map.Entry<Integer, Double>> rankedEntries = ranker.rank(documents, queryTerms);
         List<Integer> ranked = rankedEntries.stream()
             .map(Map.Entry::getKey)
             .collect(Collectors.toList());

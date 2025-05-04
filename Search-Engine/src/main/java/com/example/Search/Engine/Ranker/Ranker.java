@@ -20,7 +20,7 @@ public class Ranker {
     public static final double PAGERANK_WEIGHT = 0.3;
     static final int THREADING_THRESHOLD = 1000;
 
-    private static double docScore(QueryIndex.DocumentData docData, List<String> queryTerms) {
+    private double docScore(QueryIndex.DocumentData docData, List<String> queryTerms) {
         double tfidfScore = 0.0;
 
         Map<String, List<Double>> wordInfo = docData.getWordInfo();
@@ -30,32 +30,35 @@ public class Ranker {
             if (info != null && info.size() >= 2) {
                 double tf = info.get(0); // Term frequency
                 double idf = info.get(1); // IDF
-                tfidfScore += tf * idf;
+                double importance = info.size() > 2 ? info.get(2) : 1.0; // Importance (default to 1.0 if not present)
+                tfidfScore += tf * idf * importance;
             }
-
         }
 
         double pageRank = docData.getPageRank(); // Use getter for pageRank
-
+        //System.out.println(TFIDF_WEIGHT +" " + tfidfScore+ " " + PAGERANK_WEIGHT + " " + pageRank);
         return TFIDF_WEIGHT * tfidfScore + PAGERANK_WEIGHT * pageRank;
     }
 
     // Overload rank method to accept List<String>
-    public static  List<Map.Entry<Integer, Double>> rank(List<QueryIndex.DocumentData> documents, List<String> queryTerms) throws InterruptedException {
+    public List<Map.Entry<Integer, Double>> rank(List<QueryIndex.DocumentData> documents, List<String> queryTerms) throws InterruptedException {
         return rankDocuments(documents, queryTerms);
     }
 
     // Overload rank method to accept Set<String>
-    public static List<Map.Entry<Integer, Double>> rank(List<QueryIndex.DocumentData> documents, Set<String> queryTerms) throws InterruptedException {
+    public List<Map.Entry<Integer, Double>> rank(List<QueryIndex.DocumentData> documents, Set<String> queryTerms) throws InterruptedException {
         return rankDocuments(documents, new ArrayList<>(queryTerms));
     }
 
-    private static List<Map.Entry<Integer, Double>> rankDocuments(List<QueryIndex.DocumentData> documents, List<String> queryTerms) throws InterruptedException {
+    private List<Map.Entry<Integer, Double>> rankDocuments(List<QueryIndex.DocumentData> documents, List<String> queryTerms) throws InterruptedException {
         ConcurrentHashMap<Integer, Double> results = new ConcurrentHashMap<>();
-
         // Fetch PageRank values for all documents before scoring
         try {
+            long startTime = System.nanoTime();
             getPageRank(documents);
+            long endTime = System.nanoTime();
+            System.out.println(documents);
+            System.out.println("getPageRank calculation time: " + (endTime - startTime) / 1000000 + " milliseconds");
         } catch (SQLException e) {
             throw new RuntimeException("Failed to fetch PageRank values", e);
         }
@@ -65,6 +68,7 @@ public class Ranker {
             for (QueryIndex.DocumentData doc : documents) {
                 double score = docScore(doc, queryTerms);
                 results.put(doc.getDocId(), score);
+                //System.out.println("Document ID: " + doc.getDocId() + " Score: " + score);
             }
         } else {
             // Multi-threaded processing
@@ -81,7 +85,7 @@ public class Ranker {
         return sortedDocs;
     }
 
-    private static List<RankParallel> getRankParallels(List<QueryIndex.DocumentData> documents, List<String> queryTerms, ConcurrentHashMap<Integer, Double> results) {
+    private List<RankParallel> getRankParallels(List<QueryIndex.DocumentData> documents, List<String> queryTerms, ConcurrentHashMap<Integer, Double> results) {
         int N = documents.size();
         int docsPerThread;
         int maxThread;
@@ -108,7 +112,7 @@ public class Ranker {
         return threadList;
     }
 
-    private static class RankParallel extends Thread {
+    private class RankParallel extends Thread {
         int start;
         int end;
         List<QueryIndex.DocumentData> documents;
