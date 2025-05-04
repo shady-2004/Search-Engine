@@ -7,38 +7,32 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.*;
-import java.util.stream.Collectors;
 
 public class QueryIndex {
 
-    // DocumentData class with pageRank, without matchedQueryWords
     public static class DocumentData {
-        private final int docId; // Unique identifier for the document
-        private final Map<String, List<Double>> wordInfo; // Map of words to [frequency, IDF]
-        public  double pageRank; // PageRank score for the document
+        private final int docId;
+        private final Map<String, List<Double>> wordInfo;
+        public double pageRank;
 
-        // Constructor
         public DocumentData(int docId, Map<String, List<Double>> wordInfo) {
             this.docId = docId;
             this.wordInfo = wordInfo;
+            this.pageRank = 0.0; // Default to 0.0, assuming set by Ranker
         }
 
-        // Getter for docId
         public int getDocId() {
             return docId;
         }
 
-        // Getter for wordInfo
         public Map<String, List<Double>> getWordInfo() {
             return wordInfo;
         }
 
-        // Getter for pageRank
         public double getPageRank() {
             return pageRank;
         }
 
-        // Override toString for debugging purposes
         @Override
         public String toString() {
             StringBuilder sb = new StringBuilder();
@@ -50,7 +44,7 @@ public class QueryIndex {
                         .append(", IDF=").append(entry.getValue().get(1)).append("], ");
             }
             if (!wordInfo.isEmpty()) {
-                sb.setLength(sb.length() - 2); // Remove trailing ", "
+                sb.setLength(sb.length() - 2);
             }
             sb.append("}, pageRank=").append(pageRank);
             sb.append("}");
@@ -58,7 +52,37 @@ public class QueryIndex {
         }
     }
 
-    // Updated queryWords to return query words
+    public static class QueryResult {
+        public final List<DocumentData> documents;
+        public final List<String> queryWords;
+        public final Map<String, Double> idfMap;
+
+        public QueryResult(List<DocumentData> documents, List<String> queryWords, Map<String, Double> idfMap) {
+            this.documents = documents;
+            this.queryWords = queryWords;
+            this.idfMap = idfMap;
+        }
+    }
+
+    private static class WordData {
+        final String word;
+        final int indexId;
+        final double idf;
+
+        WordData(String word, int indexId, double idf) {
+            this.word = word;
+            this.indexId = indexId;
+            this.idf = idf;
+        }
+
+        @Override
+        public String toString() {
+            return "WordData{word=" + word + ", indexId=" + indexId + ", idf=" + idf + "}";
+        }
+    }
+
+    private static final Map<String, QueryResult> phraseQueryCache = new HashMap<>();
+
     public static QueryResult queryWords(Set<String> words, Map<String, String> stemToOriginal) throws SQLException {
         System.out.println("QueryIndex: Querying words: " + words);
         if (words == null || words.isEmpty()) {
@@ -68,20 +92,17 @@ public class QueryIndex {
 
         List<DocumentData> documentDataList = new ArrayList<>();
         Map<Integer, Map<String, List<Double>>> docWordInfo = new HashMap<>();
-        List<String> queryWords = new ArrayList<>(stemToOriginal.values()); // Collect original words
+        List<String> queryWords = new ArrayList<>(stemToOriginal.values());
 
-        // Dynamically construct the SQL query for InvertedIndex
         String baseSql = "SELECT word, doc_id, IDF FROM InvertedIndex WHERE word IN (";
         String placeholders = String.join(",", Collections.nCopies(words.size(), "?"));
         String indexSql = baseSql + placeholders + ")";
         try (Connection conn = DataBaseManager.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(indexSql)) {
-            // Set the word parameters
             int index = 1;
             for (String word : words) {
                 pstmt.setString(index++, word);
             }
-            // Execute the query and process results
             try (ResultSet rs = pstmt.executeQuery()) {
                 int rowCount = 0;
                 while (rs.next()) {
@@ -90,10 +111,7 @@ public class QueryIndex {
                     int docId = rs.getInt("doc_id");
                     double idf = rs.getDouble("IDF");
 
-                    // Initialize maps for this doc_id if not present
                     docWordInfo.computeIfAbsent(docId, k -> new HashMap<>());
-
-                    // Store word info (frequency default to 1)
                     docWordInfo.get(docId).put(word, Arrays.asList(1.0, idf));
                 }
                 System.out.println("QueryIndex: Total rows from InvertedIndex: " + rowCount);
@@ -103,7 +121,6 @@ public class QueryIndex {
             throw e;
         }
 
-        // Construct DocumentData objects
         for (int docId : docWordInfo.keySet()) {
             DocumentData docData = new DocumentData(
                     docId,
@@ -116,167 +133,178 @@ public class QueryIndex {
         return new QueryResult(documentDataList, queryWords, new HashMap<>());
     }
 
-    // Updated queryPhrase to return query words
     public static QueryResult queryPhrase(Set<String> words, Set<String> originalWords) throws SQLException {
+        long startTime = System.nanoTime();
         System.out.println("QueryIndex: Querying phrase with words: " + words);
         if (words == null || words.isEmpty()) {
             System.out.println("QueryIndex: No words provided, returning empty result");
-            return new QueryResult(new ArrayList<>(), new ArrayList<>(), new HashMap<>());
+            return new QueryResult(new ArrayList<>(), new ArrayList<>(originalWords), new HashMap<>());
         }
 
+        // Check cache
+        String cacheKey = words.toString();
+        if (phraseQueryCache.containsKey(cacheKey)) {
+            System.out.println("QueryIndex: Cache hit for phrase query: " + cacheKey);
+            QueryResult cachedResult = phraseQueryCache.get(cacheKey);
+            long endTime = System.nanoTime();
+            System.out.println("QueryIndex: Phrase query took: " + (endTime - startTime) / 1_000_000.0 + " ms");
+            return new QueryResult(
+                    new ArrayList<>(cachedResult.documents),
+                    new ArrayList<>(cachedResult.queryWords),
+                    new HashMap<>(cachedResult.idfMap)
+            );
+        }
+
+        List<String> wordList = new ArrayList<>(words);
         List<DocumentData> documentDataList = new ArrayList<>();
-        Map<Integer, Map<String, List<Double>>> docWordInfo = new HashMap<>();
-        List<String> queryWords = new ArrayList<>(originalWords); // Collect original words
+        List<String> queryWords = new ArrayList<>(originalWords);
 
-        // Step 1: Query InvertedIndex to get documents containing all words
-        String baseSql = "SELECT word, doc_id, IDF, id AS index_id FROM InvertedIndex WHERE word IN (";
-        String placeholders = String.join(",", Collections.nCopies(words.size(), "?"));
-        String indexSql = baseSql + placeholders + ")";
-        Map<Integer, List<Map<String, Object>>> docWordData = new HashMap<>();
-
-        try (Connection conn = DataBaseManager.getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(indexSql)) {
-            // Set the word parameters
-            int index = 1;
-            for (String word : words) {
-                pstmt.setString(index++, word);
-            }
-            // Execute the query
-            try (ResultSet rs = pstmt.executeQuery()) {
-                while (rs.next()) {
-                    String word = rs.getString("word");
-                    int docId = rs.getInt("doc_id");
-                    double idf = rs.getDouble("IDF");
-                    int indexId = rs.getInt("index_id");
-
-                    // Store word data for this document
-                    docWordData.computeIfAbsent(docId, k -> new ArrayList<>());
-                    Map<String, Object> wordData = new HashMap<>();
-                    wordData.put("word", word);
-                    wordData.put("index_id", indexId);
-                    wordData.put("idf", idf);
-                    docWordData.get(docId).add(wordData);
-                }
-            }
-        } catch (SQLException e) {
-            System.err.println("QueryIndex: SQL error in InvertedIndex query for phrase: " + e.getMessage());
-            throw e;
-        }
-
-        // Step 2: Filter documents that contain all words
-        List<Integer> candidateDocIds = docWordData.entrySet().stream()
-                .filter(entry -> {
-                    Set<String> foundWords = entry.getValue().stream()
-                            .map(data -> (String) data.get("word"))
-                            .collect(Collectors.toSet());
-                    return foundWords.containsAll(words);
-                })
-                .map(Map.Entry::getKey)
-                .collect(Collectors.toList());
-        System.out.println("QueryIndex: Found " + candidateDocIds.size() + " candidate documents with all words");
-
-        // Step 3: Verify phrase using WordPositions
-        for (int docId : candidateDocIds) {
-            List<Map<String, Object>> wordDataList = docWordData.get(docId);
-            List<Integer> indexIds = wordDataList.stream()
-                    .map(data -> (Integer) data.get("index_id"))
-                    .collect(Collectors.toList());
-
-            // Query WordPositions for positions
-            String posSql = "SELECT index_id, position FROM WordPositions WHERE index_id IN ("
-                    + String.join(",", Collections.nCopies(indexIds.size(), "?")) + ")";
-            Map<Integer, List<Integer>> indexIdToPositions = new HashMap<>();
-            try (Connection conn = DataBaseManager.getConnection();
-                 PreparedStatement pstmt = conn.prepareStatement(posSql)) {
+        try (Connection conn = DataBaseManager.getConnection()) {
+            // Optimized SQL query to fetch documents with all words
+            String indexSql = "SELECT word, doc_id, IDF, id AS index_id FROM InvertedIndex WHERE word IN ("
+                    + String.join(",", Collections.nCopies(words.size(), "?"))
+                    + ") AND doc_id IN (SELECT doc_id FROM InvertedIndex WHERE word IN ("
+                    + String.join(",", Collections.nCopies(words.size(), "?"))
+                    + ") GROUP BY doc_id HAVING COUNT(DISTINCT word) = ?) ORDER BY doc_id";
+            Map<Integer, Map<String, WordData>> docWordData = new HashMap<>();
+            try (PreparedStatement pstmt = conn.prepareStatement(indexSql)) {
                 int index = 1;
-                for (int indexId : indexIds) {
-                    pstmt.setInt(index++, indexId);
+                for (String word : words) {
+                    pstmt.setString(index++, word);
                 }
+                for (String word : words) {
+                    pstmt.setString(index++, word);
+                }
+                pstmt.setInt(index, words.size());
                 try (ResultSet rs = pstmt.executeQuery()) {
                     while (rs.next()) {
+                        String word = rs.getString("word");
+                        int docId = rs.getInt("doc_id");
+                        double idf = rs.getDouble("IDF");
                         int indexId = rs.getInt("index_id");
-                        int position = rs.getInt("position");
-                        indexIdToPositions.computeIfAbsent(indexId, k -> new ArrayList<>()).add(position);
+
+                        if (word == null) {
+                            System.err.println("QueryIndex: Null word in ResultSet for docId: " + docId);
+                            continue;
+                        }
+                        WordData wordData = new WordData(word, indexId, idf);
+                        System.out.println("QueryIndex: Created WordData: " + wordData);
+                        docWordData.computeIfAbsent(docId, k -> new HashMap<>());
+                        docWordData.get(docId).put(word, wordData);
                     }
                 }
             } catch (SQLException e) {
-                System.err.println("QueryIndex: SQL error in WordPositions query for docId " + docId + ": " + e.getMessage());
+                System.err.println("QueryIndex: SQL error in InvertedIndex query: " + e.getMessage());
                 throw e;
             }
+            System.out.println("QueryIndex: Found " + docWordData.size() + " candidate documents");
 
-            // Step 4: Check if words form the phrase (sequential positions)
-            boolean phraseFound = true;
-            Map<String, Integer> wordToIndexId = wordDataList.stream()
-                    .collect(Collectors.toMap(
-                            data -> (String) data.get("word"),
-                            data -> (Integer) data.get("index_id"),
-                            (id1, id2) -> id1 // Handle duplicates by keeping first
-                    ));
-            for (int i = 0; i < words.size(); i++) {
-                String word = new ArrayList<>(words).get(i);
-                Integer indexId = wordToIndexId.get(word);
-                if (indexId == null || !indexIdToPositions.containsKey(indexId)) {
-                    phraseFound = false;
-                    break;
+            // Collect all index IDs for WordPositions query
+            Set<Integer> allIndexIds = new HashSet<>();
+            Map<Integer, Map<String, Integer>> docWordToIndexId = new HashMap<>();
+            for (Map.Entry<Integer, Map<String, WordData>> entry : docWordData.entrySet()) {
+                int docId = entry.getKey();
+                Map<String, Integer> wordToIndexId = new HashMap<>();
+                for (WordData wordData : entry.getValue().values()) {
+                    wordToIndexId.put(wordData.word, wordData.indexId);
+                    allIndexIds.add(wordData.indexId);
                 }
-                List<Integer> positions = indexIdToPositions.get(indexId);
-                if (i == 0) {
-                    // For the first word, any position is fine
-                    if (positions.isEmpty()) {
-                        phraseFound = false;
-                        break;
+                docWordToIndexId.put(docId, wordToIndexId);
+            }
+
+            // Query WordPositions
+            Map<Integer, List<Integer>> indexIdToPositions = new HashMap<>();
+            if (!allIndexIds.isEmpty()) {
+                String posSql = "SELECT index_id, position FROM WordPositions WHERE index_id IN ("
+                        + String.join(",", Collections.nCopies(allIndexIds.size(), "?"))
+                        + ") ORDER BY index_id, position";
+                try (PreparedStatement posPstmt = conn.prepareStatement(posSql)) {
+                    int index = 1;
+                    for (int indexId : allIndexIds) {
+                        posPstmt.setInt(index++, indexId);
                     }
-                } else {
-                    // For subsequent words, check if there exists a position that is exactly one more than the previous word's position
-                    String prevWord = new ArrayList<>(words).get(i - 1);
-                    Integer prevIndexId = wordToIndexId.get(prevWord);
-                    List<Integer> prevPositions = indexIdToPositions.get(prevIndexId);
-                    boolean foundSequential = false;
-                    for (int prevPos : prevPositions) {
-                        if (positions.contains(prevPos + 1)) {
-                            foundSequential = true;
-                            break;
+                    try (ResultSet rs = posPstmt.executeQuery()) {
+                        while (rs.next()) {
+                            int indexId = rs.getInt("index_id");
+                            int position = rs.getInt("position");
+                            indexIdToPositions.computeIfAbsent(indexId, k -> new ArrayList<>()).add(position);
                         }
                     }
-                    phraseFound = foundSequential;
-                    if (!phraseFound) {
-                        break;
+                } catch (SQLException e) {
+                    System.err.println("QueryIndex: SQL error in WordPositions query: " + e.getMessage());
+                    throw e;
+                }
+            }
+
+            // Check phrase for each candidate document
+            for (Map.Entry<Integer, Map<String, WordData>> entry : docWordData.entrySet()) {
+                int docId = entry.getKey();
+                Map<String, WordData> wordDataMap = entry.getValue();
+                Map<String, Integer> wordToIndexId = docWordToIndexId.get(docId);
+
+                boolean phraseFound = checkSequentialPositions(indexIdToPositions, wordList, wordToIndexId);
+
+                if (phraseFound) {
+                    Map<String, List<Double>> wordInfo = new HashMap<>();
+                    for (WordData wordData : wordDataMap.values()) {
+                        wordInfo.put(wordData.word, Arrays.asList(1.0, wordData.idf));
                     }
+                    DocumentData docData = new DocumentData(docId, wordInfo);
+                    documentDataList.add(docData);
+                    System.out.println("QueryIndex: Phrase found in docId: " + docId);
                 }
             }
-
-            if (phraseFound) {
-                // Create wordInfo map for this document
-                Map<String, List<Double>> wordInfo = new HashMap<>();
-                for (Map<String, Object> wordData : wordDataList) {
-                    String word = (String) wordData.get("word");
-                    double idf = (double) wordData.get("idf");
-                    wordInfo.put(word, Arrays.asList(1.0, idf)); // Default frequency is 1
-                }
-
-                // Create DocumentData for this document
-                DocumentData docData = new DocumentData(
-                        docId,
-                        wordInfo
-                );
-                documentDataList.add(docData);
-                System.out.println("QueryIndex: Phrase found in docId: " + docId);
-            }
+        } catch (SQLException e) {
+            System.err.println("QueryIndex: SQL error in query for phrase: " + e.getMessage());
+            throw e;
         }
+
+        QueryResult result = new QueryResult(documentDataList, queryWords, new HashMap<>());
+        phraseQueryCache.put(cacheKey, result); // Cache the result
+        System.out.println("QueryIndex: Cached result for phrase query: " + cacheKey);
         System.out.println("QueryIndex: Returning " + documentDataList.size() + " documents for phrase query");
-        return new QueryResult(documentDataList, queryWords, new HashMap<>());
+
+        long endTime = System.nanoTime();
+        System.out.println("QueryIndex: Phrase query took: " + (endTime - startTime) / 1_000_000.0 + " ms");
+        return result;
     }
 
-    // Updated QueryResult to include query words
-    public static class QueryResult {
-        public final List<DocumentData> documents;
-        public final List<String> queryWords;
-        public final Map<String, Double> idfMap;
-
-        public QueryResult(List<DocumentData> documents, List<String> queryWords, Map<String, Double> idfMap) {
-            this.documents = documents;
-            this.queryWords = queryWords;
-            this.idfMap = idfMap;
+    private static boolean checkSequentialPositions(Map<Integer, List<Integer>> indexIdToPositions, List<String> words, Map<String, Integer> wordToIndexId) {
+        List<List<Integer>> positionLists = new ArrayList<>();
+        for (String word : words) {
+            Integer indexId = wordToIndexId.get(word);
+            List<Integer> positions = indexIdToPositions.getOrDefault(indexId, Collections.emptyList());
+            if (positions.isEmpty()) {
+                System.out.println("QueryIndex: No positions for word: " + word);
+                return false;
+            }
+            positionLists.add(positions); // Already sorted by SQL query
         }
+
+        List<Integer> firstPositions = positionLists.get(0);
+        for (int startPos : firstPositions) {
+            boolean valid = true;
+            for (int i = 1; i < words.size(); i++) {
+                List<Integer> positions = positionLists.get(i);
+                boolean found = false;
+                for (int pos : positions) {
+                    if (pos == startPos + i) {
+                        found = true;
+                        break;
+                    }
+                    if (pos > startPos + i) {
+                        break; // Early termination
+                    }
+                }
+                if (!found) {
+                    valid = false;
+                    break;
+                }
+            }
+            if (valid) {
+                return true;
+            }
+        }
+        return false;
     }
 }

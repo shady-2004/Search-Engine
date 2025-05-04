@@ -1,14 +1,14 @@
 package com.example.Search.Engine.QP;
 
 import com.example.Search.Engine.Ranker.Ranker;
-import opennlp.tools.tokenize.TokenizerME;
-import opennlp.tools.tokenize.TokenizerModel;
-
-import java.io.InputStream;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Component;
 
@@ -16,30 +16,30 @@ import org.springframework.stereotype.Component;
 public class QP {
 
     private static final String DB_URL = "jdbc:sqlite:data/search_index.db";
-    private static TokenizerME tokenizer;
+    private static final ExecutorService executor = Executors.newFixedThreadPool(4);
+    private static final Map<String, Set<String>> stemCache = new HashMap<>();
+    private static final Map<String, Map<String, String>> stemToOriginalCache = new HashMap<>();
 
     static {
-        // Load the tokenizer model from the classpath
-        try {
-            InputStream modelIn = QP.class.getClassLoader().getResourceAsStream("models/en-token.bin");
-            if (modelIn == null) {
-                throw new RuntimeException("Tokenizer model file 'models/en-token.bin' not found in resources");
+        // Ensure executor shutdown on JVM exit
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            executor.shutdown();
+            try {
+                if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    executor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                executor.shutdownNow();
             }
-            TokenizerModel model = new TokenizerModel(modelIn);
-            tokenizer = new TokenizerME(model);
-            modelIn.close();
-        } catch (Exception e) {
-            e.printStackTrace();
-            throw new RuntimeException("Failed to load tokenizer model", e);
-        }
+        }));
     }
 
     public static void main(String[] args) {
         QP qp = new QP();
-        String query = "naruto";
+        String query = "\"Career\" OR \"sourc\"";
         try (Connection conn = DriverManager.getConnection(DB_URL)) {
             conn.setAutoCommit(false);
-            QueryIndex.QueryResult result = qp.search(query); // Now returns QueryResult
+            QueryIndex.QueryResult result = qp.search(query);
             conn.commit();
             System.out.println("Query Words: " + result.queryWords);
             System.out.println("Relevant Documents for query \"" + query + "\":");
@@ -47,13 +47,19 @@ public class QP {
                 System.out.println("No documents found.");
             } else {
                 List<Integer> ranked = Ranker.rank(result.documents, result.queryWords);
-                System.out.println(ranked);
+                System.out.println("Ranked: "+ ranked);
             }
         } catch (SQLException e) {
             System.err.println("Database error: " + e.getMessage());
+            System.exit(1);
         } catch (InterruptedException e) {
-            throw new RuntimeException(e);
+            System.err.println("Interrupted error: " + e.getMessage());
+            System.exit(1);
+        } catch (Exception e) {
+            System.err.println("Unexpected error: " + e.getMessage());
+            System.exit(1);
         }
+        System.exit(0);
     }
 
     public QueryIndex.QueryResult search(String query) throws SQLException {
@@ -63,12 +69,10 @@ public class QP {
             return new QueryIndex.QueryResult(new ArrayList<>(), new ArrayList<>(), new HashMap<>());
         }
 
-        // Detect operator in the query
         String operator = detectOperator(query);
         QueryIndex.QueryResult finalResult;
 
         if (!operator.isEmpty()) {
-            // Split query into two parts based on operator
             String[] queryParts = splitQuery(query);
             if (queryParts.length != 2) {
                 System.out.println("QP: Invalid query format, treating as single query");
@@ -77,15 +81,29 @@ public class QP {
             String leftQuery = queryParts[0].trim();
             String rightQuery = queryParts[1].trim();
 
-            // Process left and right queries
-            QueryIndex.QueryResult leftResult = processQueryComponent(leftQuery);
-            QueryIndex.QueryResult rightResult = processQueryComponent(rightQuery);
+            CompletableFuture<QueryIndex.QueryResult> leftFuture = CompletableFuture.supplyAsync(
+                    () -> {
+                        try {
+                            return processQueryComponent(leftQuery);
+                        } catch (SQLException e) {
+                            throw new RuntimeException(e);
+                        }
+                    }, executor);
+            CompletableFuture<QueryIndex.QueryResult> rightFuture = CompletableFuture.supplyAsync(
+                    () -> {
+                        try {
+                            return processQueryComponent(rightQuery);
+                        } catch (SQLException e) {
+                            throw new RuntimeException(e);
+                        }
+                    }, executor);
 
-            // Combine query words
+            QueryIndex.QueryResult leftResult = leftFuture.join();
+            QueryIndex.QueryResult rightResult = rightFuture.join();
+
             List<String> combinedQueryWords = new ArrayList<>(leftResult.queryWords);
             combinedQueryWords.addAll(rightResult.queryWords);
 
-            // Apply Boolean operator logic
             List<QueryIndex.DocumentData> documents;
             switch (operator) {
                 case "AND":
@@ -106,7 +124,6 @@ public class QP {
             }
             finalResult = new QueryIndex.QueryResult(documents, combinedQueryWords, new HashMap<>());
         } else {
-            // No operator, process as single query
             finalResult = processQueryComponent(query);
         }
 
@@ -117,21 +134,32 @@ public class QP {
 
     private QueryIndex.QueryResult processQueryComponent(String query) throws SQLException {
         if (isQuoted(query)) {
-            // Remove quotes from the phrase
             String cleanQuery = query.replaceAll("^\"|\"$", "");
             System.out.println("QP: Processing phrase query: " + cleanQuery);
-            // Tokenize the phrase to get original words
-            String[] originalWords = tokenizer.tokenize(cleanQuery);
-            // Stem the tokens for querying
+            String[] originalWords = cleanQuery.split("\\s+");
+            if (originalWords.length == 0) {
+                originalWords = new String[]{cleanQuery};
+            }
             Map<String, String> stemToOriginal = new HashMap<>();
             Set<String> queryStems = tokenizeAndStem(cleanQuery, stemToOriginal);
-            return QueryIndex.queryPhrase(queryStems, new HashSet<>(Arrays.asList(originalWords)));
+            List<String> queryWords = Arrays.asList(originalWords);
+            return new QueryIndex.QueryResult(
+                    QueryIndex.queryPhrase(queryStems, new HashSet<>(queryWords)).documents,
+                    queryWords,
+                    new HashMap<>()
+            );
         } else {
-            // Process as non-phrase query
             Map<String, String> stemToOriginal = new HashMap<>();
             Set<String> queryStems = tokenizeAndStem(query, stemToOriginal);
             System.out.println("QP: Processing word query with stems: " + queryStems);
-            return QueryIndex.queryWords(queryStems, stemToOriginal);
+            List<String> queryWords = queryStems.stream()
+                    .map(stem -> stemToOriginal.getOrDefault(stem, stem))
+                    .collect(Collectors.toList());
+            return new QueryIndex.QueryResult(
+                    QueryIndex.queryWords(queryStems, stemToOriginal).documents,
+                    queryWords,
+                    new HashMap<>()
+            );
         }
     }
 
@@ -161,14 +189,15 @@ public class QP {
             if (!resultMap.containsKey(doc.getDocId())) {
                 resultMap.put(doc.getDocId(), doc);
             } else {
-                // Merge wordInfo for OR operation
                 Map<String, List<Double>> mergedWordInfo = new HashMap<>(resultMap.get(doc.getDocId()).getWordInfo());
                 mergedWordInfo.putAll(doc.getWordInfo());
 
-                resultMap.put(doc.getDocId(), new QueryIndex.DocumentData(
+                QueryIndex.DocumentData mergedDoc = new QueryIndex.DocumentData(
                         doc.getDocId(),
                         mergedWordInfo
-                ));
+                );
+                mergedDoc.pageRank = Math.max(resultMap.get(doc.getDocId()).getPageRank(), doc.getPageRank());
+                resultMap.put(doc.getDocId(), mergedDoc);
             }
         }
         return new ArrayList<>(resultMap.values());
@@ -208,20 +237,34 @@ public class QP {
         if (text == null || text.trim().isEmpty()) {
             return new HashSet<>();
         }
-        // Use OpenNLP tokenizer
-        String[] tokens = tokenizer.tokenize(text);
+
+        if (stemCache.containsKey(text)) {
+            Set<String> cachedStems = stemCache.get(text);
+            Map<String, String> cachedMapping = stemToOriginalCache.get(text);
+            stemToOriginal.putAll(cachedMapping);
+            return new HashSet<>(cachedStems);
+        }
+
+        String[] tokens = isQuoted(text) ? new String[]{text.replaceAll("^\"|\"$", "")} : text.split("\\s+");
         Set<String> stems = new HashSet<>();
         Stemmer stemmer = new Stemmer();
         for (String token : tokens) {
-            if (!token.isEmpty()) {
+            if (token != null && !token.trim().isEmpty()) {
                 String lowerToken = token.toLowerCase();
-                stemmer.add(lowerToken.toCharArray(), lowerToken.length());
-                stemmer.stem();
-                String stem = stemmer.toString();
-                stems.add(stem);
-                stemToOriginal.put(stem, token); // Map stem to original token (preserving case)
+                if (lowerToken.length() > 0) {
+                    stemmer.add(lowerToken.toCharArray(), lowerToken.length());
+                    stemmer.stem();
+                    String stem = stemmer.toString();
+                    if (!stem.isEmpty()) {
+                        stems.add(stem);
+                        stemToOriginal.put(stem, token);
+                    }
+                }
             }
         }
+
+        stemCache.put(text, new HashSet<>(stems));
+        stemToOriginalCache.put(text, new HashMap<>(stemToOriginal));
         return stems;
     }
 }
