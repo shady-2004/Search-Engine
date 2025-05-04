@@ -10,7 +10,9 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.*;
 import java.util.stream.Collectors;
+import org.springframework.stereotype.Component;
 
+@Component
 public class QP {
 
     private static final String DB_URL = "jdbc:sqlite:data/search_index.db";
