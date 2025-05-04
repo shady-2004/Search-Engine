@@ -65,19 +65,25 @@ public class QueryIndex {
     }
 
     private static class WordData {
-        final String word;
+
+        final String word; // Stemmed word
+        final String originalWord; // Original query word
         final int indexId;
         final double idf;
 
-        WordData(String word, int indexId, double idf) {
+        WordData(String word, String originalWord, int indexId, double idf) {
             this.word = word;
+            this.originalWord = originalWord;
+
             this.indexId = indexId;
             this.idf = idf;
         }
 
         @Override
         public String toString() {
-            return "WordData{word=" + word + ", indexId=" + indexId + ", idf=" + idf + "}";
+
+            return "WordData{word=" + word + ", originalWord=" + originalWord + ", indexId=" + indexId + ", idf=" + idf + "}";
+
         }
     }
 
@@ -107,12 +113,25 @@ public class QueryIndex {
                 int rowCount = 0;
                 while (rs.next()) {
                     rowCount++;
-                    String word = rs.getString("word");
+                    String stemmedWord = rs.getString("word");
                     int docId = rs.getInt("doc_id");
                     double idf = rs.getDouble("IDF");
 
+
+                    if (stemmedWord == null) {
+                        System.err.println("QueryIndex: Null word in ResultSet for docId: " + docId);
+                        continue;
+                    }
+                    String originalWord = stemToOriginal.getOrDefault(stemmedWord, stemmedWord);
+                    if (originalWord == null) {
+                        System.err.println("QueryIndex: No original word for stem: " + stemmedWord);
+                        continue;
+                    }
+
                     docWordInfo.computeIfAbsent(docId, k -> new HashMap<>());
-                    docWordInfo.get(docId).put(word, Arrays.asList(1.0, idf));
+                    docWordInfo.get(docId).put(originalWord, Arrays.asList(1.0, idf));
+                    System.out.println("QueryIndex: Added wordInfo for docId: " + docId + ", word: " + originalWord);
+
                 }
                 System.out.println("QueryIndex: Total rows from InvertedIndex: " + rowCount);
             }
@@ -153,11 +172,20 @@ public class QueryIndex {
                     new ArrayList<>(cachedResult.queryWords),
                     new HashMap<>(cachedResult.idfMap)
             );
+
         }
 
         List<String> wordList = new ArrayList<>(words);
         List<DocumentData> documentDataList = new ArrayList<>();
         List<String> queryWords = new ArrayList<>(originalWords);
+
+        // Create stemToOriginal mapping based on originalWords order
+        Map<String, String> stemToOriginal = new HashMap<>();
+        List<String> originalWordList = new ArrayList<>(originalWords);
+        for (int i = 0; i < wordList.size() && i < originalWordList.size(); i++) {
+            stemToOriginal.put(wordList.get(i), originalWordList.get(i));
+        }
+
 
         try (Connection conn = DataBaseManager.getConnection()) {
             // Optimized SQL query to fetch documents with all words
@@ -178,19 +206,29 @@ public class QueryIndex {
                 pstmt.setInt(index, words.size());
                 try (ResultSet rs = pstmt.executeQuery()) {
                     while (rs.next()) {
-                        String word = rs.getString("word");
+
+                        String stemmedWord = rs.getString("word");
+
                         int docId = rs.getInt("doc_id");
                         double idf = rs.getDouble("IDF");
                         int indexId = rs.getInt("index_id");
 
-                        if (word == null) {
+
+                        if (stemmedWord == null) {
                             System.err.println("QueryIndex: Null word in ResultSet for docId: " + docId);
                             continue;
                         }
-                        WordData wordData = new WordData(word, indexId, idf);
+                        String originalWord = stemToOriginal.getOrDefault(stemmedWord, stemmedWord);
+                        if (originalWord == null) {
+                            System.err.println("QueryIndex: No original word for stem: " + stemmedWord);
+                            continue;
+                        }
+
+                        WordData wordData = new WordData(stemmedWord, originalWord, indexId, idf);
                         System.out.println("QueryIndex: Created WordData: " + wordData);
                         docWordData.computeIfAbsent(docId, k -> new HashMap<>());
-                        docWordData.get(docId).put(word, wordData);
+                        docWordData.get(docId).put(stemmedWord, wordData);
+
                     }
                 }
             } catch (SQLException e) {
@@ -247,7 +285,10 @@ public class QueryIndex {
                 if (phraseFound) {
                     Map<String, List<Double>> wordInfo = new HashMap<>();
                     for (WordData wordData : wordDataMap.values()) {
-                        wordInfo.put(wordData.word, Arrays.asList(1.0, wordData.idf));
+
+                        wordInfo.put(wordData.originalWord, Arrays.asList(1.0, wordData.idf));
+                        System.out.println("QueryIndex: Added wordInfo for docId: " + docId + ", word: " + wordData.originalWord);
+
                     }
                     DocumentData docData = new DocumentData(docId, wordInfo);
                     documentDataList.add(docData);
