@@ -124,7 +124,7 @@ public class QueryIndex {
         }
 
         List<DocumentData> documentDataList = new ArrayList<>();
-        Map<Integer, Map<String, List<Double>>> docWordInfo = new HashMap<>();
+        //Map<Integer, Map<String, List<Double>>> docWordInfo = new HashMap<>();
 
         // Step 1: Query InvertedIndex to get documents containing all words
         String baseSql = "SELECT word, doc_id, IDF, id AS index_id FROM InvertedIndex WHERE word IN (";
@@ -133,7 +133,7 @@ public class QueryIndex {
         Map<Integer, List<Map<String, Object>>> docWordData = new HashMap<>();
 
         try (Connection conn = DataBaseManager.getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(indexSql)) {
+            PreparedStatement pstmt = conn.prepareStatement(indexSql)) {
             // Set the word parameters
             int index = 1;
             for (String word : words) {

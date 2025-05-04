@@ -1,10 +1,10 @@
 package com.example.Search.Engine.controller;
 
-import com.example.Search.Engine.DatabaseManager;
+import com.example.Search.Engine.BackendManager;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.http.HttpStatus;
 
 import java.util.List;
 
@@ -14,18 +14,18 @@ import java.util.List;
  */
 @RestController
 @RequestMapping("/api/search")
-@CrossOrigin(origins = "*") // Allow requests from any origin
+@CrossOrigin(origins = "http://localhost:5173", allowCredentials = "true")
 public class SearchController {
 
-    private final DatabaseManager databaseManager;
+    private final BackendManager backendManager;
 
     @Autowired
-    public SearchController(DatabaseManager databaseManager) {
-        this.databaseManager = databaseManager;
+    public SearchController(BackendManager backendManager) {
+        this.backendManager = backendManager;
     }
 
-    @GetMapping
-    public ResponseEntity<DatabaseManager.SearchResponse> search(
+    @GetMapping("/search")
+    public ResponseEntity<BackendManager.SearchResponse> search(
             @RequestParam String query,
             @RequestParam(required = false, defaultValue = "0") int page,
             @RequestParam(required = false, defaultValue = "10") int size) {
@@ -35,7 +35,7 @@ public class SearchController {
         }
 
         if (page < 0) {
-            return ResponseEntity.badRequest().body(new DatabaseManager.SearchResponse(List.of(), 0));
+            return ResponseEntity.badRequest().body(new BackendManager.SearchResponse(List.of(), 0));
         }
 
         if (size <= 0 || size > 100) {
@@ -43,7 +43,7 @@ public class SearchController {
         }
 
         try {
-            DatabaseManager.SearchResponse response = databaseManager.search(query, page, size);
+            BackendManager.SearchResponse response = backendManager.search(query, page, size);
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();

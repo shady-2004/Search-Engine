@@ -9,10 +9,9 @@ import com.example.Search.Engine.Ranker.Ranker;
 import org.springframework.beans.factory.annotation.Autowired;
 import java.sql.*;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Component
-public class DatabaseManager {
+public class BackendManager {
     private static final String DB_URL = "jdbc:sqlite:./data/search_index.db";
     private Connection connection;
     private Tokenizer tokenizer;
@@ -20,7 +19,7 @@ public class DatabaseManager {
     private final Ranker ranker;
 
     @Autowired
-    public DatabaseManager(QP queryProcessor, Ranker ranker) {
+    public BackendManager(QP queryProcessor, Ranker ranker) {
         this.queryProcessor = queryProcessor;
         this.ranker = ranker;
         this.tokenizer = new Tokenizer();
@@ -155,6 +154,46 @@ public class DatabaseManager {
             System.err.println("Search query failed: " + e.getMessage());
             e.printStackTrace();
             return new SearchResponse(Collections.emptyList(), 0);
+        }
+    }
+
+    public List<String> getSearchSuggestions(String query) throws SQLException {
+        if (connection == null) {
+            System.err.println("Database connection is null. Attempting to reinitialize...");
+            initialize();
+        }
+
+        if (query == null || query.trim().isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        String searchTerm = query.trim().toLowerCase();
+        String sql = """
+            SELECT DISTINCT word
+            FROM InvertedIndex
+            WHERE word LIKE ? || '%'
+            ORDER BY 
+                CASE 
+                    WHEN word = ? THEN 1
+                    WHEN word LIKE ? || ' %' THEN 2
+                    ELSE 3
+                END,
+                word
+            LIMIT 5
+        """;
+
+        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+            pstmt.setString(1, searchTerm);
+            pstmt.setString(2, searchTerm);
+            pstmt.setString(3, searchTerm);
+
+            List<String> suggestions = new ArrayList<>();
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    suggestions.add(rs.getString("word"));
+                }
+            }
+            return suggestions;
         }
     }
 
