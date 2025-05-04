@@ -80,13 +80,6 @@ public class PageRank {
                 newProbability.put(i, rank);
             }
 
-//            double total = 0.0;
-//            for (double val : newProbability.values()) {
-//                total += val;
-//            }
-//            for (Integer node : newProbability.keySet()) {
-//                newProbability.put(node, newProbability.get(node) / total);
-//            }
 
             // Check for convergence
             for (Integer node : probability.keySet()) {

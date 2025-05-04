@@ -1,5 +1,6 @@
 package com.example.Search.Engine;
 
+import com.example.Search.Engine.QP.QueryIndex;
 import org.springframework.context.event.ContextRefreshedEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
@@ -92,58 +93,84 @@ public class DatabaseManager {
         }
 
         // Process the query using QP
-        Set<String> queryStems = queryProcessor.tokenizeAndStem(query);
-        System.out.println("Searching for stems: " + queryStems);
+        QueryIndex.QueryResult queryResult;
+        try {
+            queryResult = queryProcessor.search(query);
+        } catch (SQLException e) {
+            System.err.println("Query processing failed: " + e.getMessage());
+            e.printStackTrace();
+            return new SearchResponse(Collections.emptyList(), 0);
+        }
+        List<QueryIndex.DocumentData> documents = queryResult.documents;
+        int totalCount = documents.size();
+        System.out.println("Searching for query: " + query + ", found " + totalCount + " documents");
 
-        if (queryStems.isEmpty()) {
-            System.out.println("No valid stems found in query");
+        if (documents.isEmpty()) {
+            System.out.println("No documents found for query");
             return new SearchResponse(Collections.emptyList(), 0);
         }
 
         try {
-            // Get total count first
-            int totalCount = getTotalCount(queryStems);
+            // Stem queryWords to match wordInfo keys
+            Map<String, String> stemToOriginal = new HashMap<>();
+            Set<String> stemmedQueryWords = queryProcessor.tokenizeAndStem(
+                    String.join(" ", queryResult.queryWords), stemToOriginal);
+            System.out.println("Searching for stems: " + stemmedQueryWords);
 
-            // Get matching documents with their scores
-            String getResultsSql = """
-                WITH matching_docs AS (
-                    SELECT 
-                        i.doc_id,
-                        SUM(i.frequency * i.importance * i.IDF) as score
-                    FROM InvertedIndex i
-                    WHERE i.word IN (%s)
-                    GROUP BY i.doc_id
-                    ORDER BY score DESC
-                )
-                SELECT 
-                    d.url,
-                    d.title,
-                    m.score
-                FROM matching_docs m
-                JOIN DocumentMetaData d ON m.doc_id = d.id
-                ORDER BY m.score DESC
-                LIMIT ? OFFSET ?
-            """;
+            if (stemmedQueryWords.isEmpty()) {
+                System.out.println("No valid stems found in query");
+                return new SearchResponse(Collections.emptyList(), 0);
+            }
 
-            String placeholders = String.join(",", Collections.nCopies(queryStems.size(), "?"));
-            getResultsSql = String.format(getResultsSql, placeholders);
+            // Rank documents
+            List<Integer> rankedDocIds = Ranker.rank(documents, stemmedQueryWords);
+            System.out.println("Ranked " + rankedDocIds.size() + " documents");
 
-            List<SearchResult> results = new ArrayList<>();
-            try (PreparedStatement pstmt = connection.prepareStatement(getResultsSql)) {
-                int paramIndex = 1;
-                for (String stem : queryStems) {
-                    pstmt.setString(paramIndex++, stem);
+            // Apply pagination
+            int startIndex = page * size;
+            int endIndex = Math.min(startIndex + size, rankedDocIds.size());
+            if (startIndex >= rankedDocIds.size()) {
+                System.out.println("Page " + page + " is out of range");
+                return new SearchResponse(Collections.emptyList(), totalCount);
+            }
+            List<Integer> pagedDocIds = rankedDocIds.subList(startIndex, endIndex);
+
+            // Compute scores for documents
+            Map<Integer, Double> docScores = new HashMap<>();
+            for (QueryIndex.DocumentData doc : documents) {
+                double score = 0.0;
+                Map<String, List<Double>> wordInfo = doc.getWordInfo();
+                for (String queryTerm : stemmedQueryWords) {
+                    List<Double> info = wordInfo.get(queryTerm);
+                    if (info != null && info.size() >= 2) {
+                        double tf = info.get(0); // Term frequency
+                        double idf = info.get(1); // IDF
+                        score += tf * idf;
+                    }
                 }
-                pstmt.setInt(paramIndex++, size);
-                pstmt.setInt(paramIndex, page * size);
+                score = Ranker.TFIDF_WEIGHT * score + Ranker.PAGERANK_WEIGHT * doc.getPageRank();
+                docScores.put(doc.getDocId(), score);
+            }
 
-                try (ResultSet rs = pstmt.executeQuery()) {
-                    while (rs.next()) {
-                        results.add(new SearchResult(
-                            rs.getString("url"),
-                            rs.getString("title"),
-                            rs.getDouble("score")
-                        ));
+            // Get matching documents with their metadata
+            List<SearchResult> results = new ArrayList<>();
+            if (!pagedDocIds.isEmpty()) {
+                String getResultsSql = "SELECT id, url, title FROM DocumentMetaData WHERE id IN ("
+                        + String.join(",", Collections.nCopies(pagedDocIds.size(), "?")) + ")";
+                try (PreparedStatement pstmt = connection.prepareStatement(getResultsSql)) {
+                    int paramIndex = 1;
+                    for (int docId : pagedDocIds) {
+                        pstmt.setInt(paramIndex++, docId);
+                    }
+                    try (ResultSet rs = pstmt.executeQuery()) {
+                        while (rs.next()) {
+                            int docId = rs.getInt("id");
+                            results.add(new SearchResult(
+                                    rs.getString("url"),
+                                    rs.getString("title"),
+                                    docScores.getOrDefault(docId, 0.0)
+                            ));
+                        }
                     }
                 }
             }
@@ -154,6 +181,10 @@ public class DatabaseManager {
         } catch (SQLException e) {
             System.err.println("Search query failed: " + e.getMessage());
             e.printStackTrace();
+            return new SearchResponse(Collections.emptyList(), 0);
+        } catch (InterruptedException e) {
+            System.err.println("Ranking interrupted: " + e.getMessage());
+            Thread.currentThread().interrupt();
             return new SearchResponse(Collections.emptyList(), 0);
         }
     }

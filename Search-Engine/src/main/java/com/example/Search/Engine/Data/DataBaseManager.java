@@ -1,5 +1,6 @@
 package com.example.Search.Engine.Data;
 
+import com.example.Search.Engine.QP.QueryIndex;
 import javafx.util.Pair;
 import java.sql.*;
 import java.util.*;
@@ -11,58 +12,27 @@ import java.util.stream.Collectors;
 public class DataBaseManager {
     private static final String URL = "jdbc:sqlite:./data/search_index.db";
 
-    public static class DocumentData {
-        private final int docId;
-        private final Map<String, Integer> termFrequencies;
-        private final int documentLength;
-        private final double pageRank;
-
-        public DocumentData(int docId, Map<String, Integer> termFrequencies,
-                            int documentLength, double pageRank) {
-            this.docId = docId;
-            this.termFrequencies = termFrequencies;
-            this.documentLength = documentLength;
-            this.pageRank = pageRank;
-        }
-
-        public int getDocId() {
-            return docId;
-        }
-
-        public Map<String, Integer> getTermFrequencies() {
-            return termFrequencies;
-        }
-
-        public int getDocumentLength() {
-            return documentLength;
-        }
-
-        public double getPageRank() {
-            return pageRank;
-        }
-    }
-
     public static Connection getConnection() throws SQLException {
         return DriverManager.getConnection(URL);
     }
-    public static List<Pair<String,Integer>> GetALLQueries() throws SQLException {
-        List<Pair<String,Integer>>queries=new ArrayList<>();
-        String sql="SELECT * FROM search_queries;\n";
-        try(Connection conn=getConnection();
-            Statement stmt= getConnection().createStatement();
-        ResultSet rs = stmt.executeQuery(sql)){
-                Instant currentTimestamp = Instant.now();
-            while(rs.next()){
-                Timestamp dbTimestamp = rs.getTimestamp("lastAdded");  // Replace with actual column name
+
+    public static List<Pair<String, Integer>> GetALLQueries() throws SQLException {
+        List<Pair<String, Integer>> queries = new ArrayList<>();
+        String sql = "SELECT * FROM search_queries;\n";
+        try (Connection conn = getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            Instant currentTimestamp = Instant.now();
+            while (rs.next()) {
+                Timestamp dbTimestamp = rs.getTimestamp("lastAdded"); // Replace with actual column name
                 Duration duration = Duration.between(dbTimestamp.toInstant(), currentTimestamp);
                 // Get the current timestamp
-                if(duration.toHours()>12)continue;
-                queries.add(new Pair<>(rs.getString("query"),rs.getInt("count")));
+                if (duration.toHours() > 12) continue;
+                queries.add(new Pair<>(rs.getString("query"), rs.getInt("count")));
             }
         }
         return queries;
     }
-
 
     public static Map<Integer, List<Integer>> getGraphFromDB() throws SQLException {
         Map<Integer, List<Integer>> graph = new HashMap<>();
@@ -94,13 +64,11 @@ public class DataBaseManager {
         return graph;
     }
 
-
     public static void setPageRank(Map<Integer, Double> pageRankMap) throws SQLException {
         String updateSql = "UPDATE DocumentMetaData SET page_rank = ? WHERE id = ?;";
 
         try (Connection conn = getConnection();
              PreparedStatement pstmt = conn.prepareStatement(updateSql)) {
-
 
             for (Map.Entry<Integer, Double> entry : pageRankMap.entrySet()) {
                 int id = entry.getKey();
@@ -115,8 +83,45 @@ public class DataBaseManager {
 
         } catch (SQLException e) {
             e.printStackTrace();
-            throw e;  // Re-throw exception after logging for further handling
+            throw e; // Re-throw exception after logging for further handling
         }
     }
 
+    public static void getPageRank(List<QueryIndex.DocumentData> documents) throws SQLException {
+        if (documents == null || documents.isEmpty()) {
+            return; // No documents to process
+        }
+
+        // Build SQL query with placeholders based on number of documents
+        String placeholders = String.join(",", Collections.nCopies(documents.size(), "?"));
+        String sql = "SELECT id, page_rank FROM DocumentMetaData WHERE id IN (" + placeholders + ")";
+
+        try (Connection conn = getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+
+            // Set parameters for the query directly from documents
+            for (int i = 0; i < documents.size(); i++) {
+                pstmt.setInt(i + 1, documents.get(i).getDocId());
+            }
+
+            // Execute query and process results
+            try (ResultSet rs = pstmt.executeQuery()) {
+                // Create a map for quick lookup of documents by docId
+                Map<Integer, QueryIndex.DocumentData> docMap = documents.stream()
+                        .collect(Collectors.toMap(QueryIndex.DocumentData::getDocId, doc -> doc));
+
+                while (rs.next()) {
+                    int id = rs.getInt("id");
+                    double pageRank = rs.getDouble("page_rank");
+                    QueryIndex.DocumentData doc = docMap.get(id);
+                    if (doc != null) {
+                        doc.pageRank = pageRank; // Update pageRank field
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+            throw e; // Re-throw exception for further handling
+        }
+    }
 }
