@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
 public class Crawler {
-    private static final int MAX_PAGES = 3000;
+    private static final int MAX_PAGES = 1000;
     private static final int MAX_PAGES_PER_DOMAIN = 30;
     private static final int MAX_DEPTH_PER_DOMAIN = 10;
     private static final int CHECKPOINT_INTERVAL = 20;
