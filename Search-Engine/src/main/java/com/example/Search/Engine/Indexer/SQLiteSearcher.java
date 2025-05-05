@@ -55,7 +55,8 @@ public class SQLiteSearcher implements AutoCloseable {
                 url TEXT NOT NULL,
                 title TEXT,
                 last_crawled_date TEXT DEFAULT CURRENT_TIMESTAMP,
-                html TEXT
+                html TEXT,
+                page_rank REAL DEFAULT 0.0
             )
         """;
 

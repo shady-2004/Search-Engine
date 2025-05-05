@@ -7,9 +7,12 @@ import org.springframework.stereotype.Component;
 import com.example.Search.Engine.Indexer.Tokenizer;
 import com.example.Search.Engine.QP.QP;
 import com.example.Search.Engine.Ranker.Ranker;
+import com.example.Search.Engine.Ranker.PageRank;
 import org.springframework.beans.factory.annotation.Autowired;
 import java.sql.*;
 import java.util.*;
+import java.util.stream.Collectors;
+import java.util.regex.Pattern;
 
 @Component
 public class BackendManager {
@@ -60,6 +63,36 @@ public class BackendManager {
         }
     }
 
+    public static class SearchResult {
+        private final String url;
+        private final String title;
+        private final double score;
+        private final String snippet;
+
+        public SearchResult(String url, String title, double score, String snippet) {
+            this.url = url;
+            this.title = title;
+            this.score = score;
+            this.snippet = snippet;
+        }
+
+        public String getUrl() {
+            return url;
+        }
+
+        public String getTitle() {
+            return title;
+        }
+
+        public double getScore() {
+            return score;
+        }
+
+        public String getSnippet() {
+            return snippet;
+        }
+    }
+
     private int getTotalCount(Set<String> queryStems) throws SQLException {
         String countSql = """
             SELECT COUNT(DISTINCT i.doc_id) as total
@@ -85,21 +118,186 @@ public class BackendManager {
         return 0;
     }
 
+    private String generateSnippet(String title, String url, Map<String, List<Double>> wordInfo, Set<String> queryWords) {
+        try {
+            // Get the HTML content from the database
+            String getContentSql = "SELECT html FROM DocumentMetaData WHERE url = ?";
+            try (PreparedStatement pstmt = connection.prepareStatement(getContentSql)) {
+                pstmt.setString(1, url);
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    if (rs.next()) {
+                        String html = rs.getString("html");
+                        if (html != null && !html.isEmpty()) {
+                            // Clean HTML and extract text content
+                            String text = html
+                                // Remove scripts (including inline and external)
+                                .replaceAll("(?is)<script\\b[^<]*(?:(?!</script>)<[^<]*)*</script>", " ")
+                                // Remove styles (including inline and external)
+                                .replaceAll("(?is)<style\\b[^<]*(?:(?!</style>)<[^<]*)*</style>", " ")
+                                // Remove HTML comments
+                                .replaceAll("(?s)<!--.*?-->", " ")
+                                // Remove all remaining HTML tags
+                                .replaceAll("<[^>]+>", " ")
+                                // Decode common HTML entities
+                                .replaceAll("&nbsp;|[\\u00A0]", " ")
+                                .replaceAll("&amp;", "&")
+                                .replaceAll("&lt;", "<")
+                                .replaceAll("&gt;", ">")
+                                .replaceAll("&quot;", "\"")
+                                .replaceAll("&#39;", "'")
+                                .replaceAll("&#[0-9]+;", " ")
+                                // Remove other HTML entities
+                                .replaceAll("&[a-zA-Z0-9#]+;", " ")
+                                // Normalize whitespace and control characters
+                                .replaceAll("[\\p{Cntrl}&&[^\n\t]]", "")
+                                .replaceAll("\\s*[\\r\\n]+\\s*", " ")
+                                .replaceAll("\\s*[.,!?]+\\s*", ". ")
+                                .replaceAll("\\.+", ".")
+                                .replaceAll("\\s+", " ")
+                                .trim();
+    
+                            // Find the best position to start the snippet
+                            int bestPosition = -1;
+                            String bestWord = null;
+    
+                            // First try to find exact word matches in the text
+                            for (String word : queryWords) {
+                                int pos = text.toLowerCase().indexOf(word.toLowerCase());
+                                if (pos != -1) {
+                                    bestPosition = pos;
+                                    bestWord = word;
+                                    break;
+                                }
+                            }
+    
+                            // If no exact match found, try using wordInfo positions
+                            if (bestPosition == -1) {
+                                for (String word : queryWords) {
+                                    if (wordInfo.containsKey(word)) {
+                                        List<Double> positions = wordInfo.get(word);
+                                        if (!positions.isEmpty()) {
+                                            int position = positions.get(0).intValue();
+                                            if (position < text.length()) {
+                                                bestPosition = position;
+                                                bestWord = word;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+    
+                            if (bestPosition == -1) {
+                                return "No preview available for this result.";
+                            }
+    
+                            // Find sentence boundaries
+                            int startPos = bestPosition;
+                            int endPos = bestPosition;
+    
+                            // Look for sentence start (period + space or start of text)
+                            while (startPos > 0 && startPos > bestPosition - 150) {
+                                if (startPos >= 2 && text.substring(startPos - 2, startPos).matches("\\. ")) {
+                                    startPos -= 2;
+                                    break;
+                                }
+                                startPos--;
+                            }
+    
+                            // Look for sentence end (period + space or end of text)
+                            while (endPos < text.length() && endPos < bestPosition + 150) {
+                                if (endPos + 2 <= text.length() && text.substring(endPos, endPos + 2).matches("\\. ")) {
+                                    endPos += 2;
+                                    break;
+                                }
+                                endPos++;
+                            }
+    
+                            // Ensure we don't exceed text boundaries
+                            startPos = Math.max(0, startPos);
+                            endPos = Math.min(text.length(), endPos);
+    
+                            StringBuilder snippet = new StringBuilder();
+                            if (startPos > 0) {
+                                snippet.append("...");
+                            }
+    
+                            String snippetText = text.substring(startPos, endPos).trim();
+    
+                            // Verify the snippet contains at least one query word
+                            boolean containsQueryWord = false;
+                            for (String word : queryWords) {
+                                if (snippetText.toLowerCase().contains(word.toLowerCase())) {
+                                    containsQueryWord = true;
+                                    break;
+                                }
+                            }
+    
+                            if (!containsQueryWord) {
+                                // If no query word in snippet, expand the snippet
+                                startPos = Math.max(0, bestPosition - 100);
+                                endPos = Math.min(text.length(), bestPosition + 100);
+                                snippetText = text.substring(startPos, endPos).trim();
+                            }
+    
+                            // Clean up the snippet text
+                            snippetText = snippetText
+                                .replaceAll("\\s+", " ")
+                                .replaceAll("\\s*[.,!?]+\\s*", ". ")
+                                .replaceAll("\\.+", ".")
+                                .replaceAll("^[^a-zA-Z0-9]+", "")
+                                .replaceAll("[^a-zA-Z0-9]+$", "")
+                                .trim();
+    
+                            // Highlight query words in the snippet
+                            for (String word : queryWords) {
+                                snippetText = snippetText.replaceAll(
+                                    "(?i)\\b" + Pattern.quote(word) + "\\b",
+                                    "<strong>$0</strong>"
+                                );
+                            }
+    
+                            snippet.append(snippetText);
+    
+                            if (endPos < text.length()) {
+                                snippet.append("...");
+                            }
+    
+                            return snippet.toString();
+                        }
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("Error generating snippet: " + e.getMessage());
+        }
+        // Fallback to title-based snippet if content retrieval fails
+        return "No preview available for this result.";
+    }
+
     public SearchResponse search(String query, int page, int size) {
         if (connection == null) {
             System.err.println("Database connection is null. Attempting to reinitialize...");
             initialize();
+            if (connection == null) {
+                System.err.println("Failed to initialize database connection");
+                return new SearchResponse(Collections.emptyList(), 0);
+            }
         }
 
         // Process the query using QP
         QueryIndex.QueryResult queryResult;
         try {
+            long startTime = System.nanoTime();
             queryResult = queryProcessor.search(query);
+            long endTime = System.nanoTime();
+            System.out.println("Query processing time: " + (endTime - startTime) / 1000000 + " milliseconds");
         } catch (SQLException e) {
             System.err.println("Query processing failed: " + e.getMessage());
             e.printStackTrace();
             return new SearchResponse(Collections.emptyList(), 0);
         }
+
         List<QueryIndex.DocumentData> documents = queryResult.documents;
         int totalCount = documents.size();
         System.out.println("Searching for query: " + query + ", found " + totalCount + " documents");
@@ -110,19 +308,24 @@ public class BackendManager {
         }
 
         try {
-            // Stem queryWords to match wordInfo keys
-            Map<String, String> stemToOriginal = new HashMap<>();
-            Set<String> stemmedQueryWords = queryProcessor.tokenizeAndStem(
-                    String.join(" ", queryResult.queryWords), stemToOriginal);
-            System.out.println("Searching for stems: " + stemmedQueryWords);
-
-            if (stemmedQueryWords.isEmpty()) {
-                System.out.println("No valid stems found in query");
-                return new SearchResponse(Collections.emptyList(), 0);
-            }
 
             // Rank documents
-            List<Integer> rankedDocIds = Ranker.rank(documents, stemmedQueryWords);
+            long startTime = System.nanoTime();
+            List<Map.Entry<Integer, Double>> rankedEntries;
+            try {
+                rankedEntries = ranker.rank(documents, queryResult.queryWords);
+            } catch (InterruptedException e) {
+                System.err.println("Ranking interrupted: " + e.getMessage());
+                Thread.currentThread().interrupt();
+                return new SearchResponse(Collections.emptyList(), 0);
+            }
+            System.out.println("Ranked entries: " + rankedEntries);
+            long endTime = System.nanoTime();
+            System.out.println("Ranking time: " + (endTime - startTime) / 1000000 + " milliseconds");
+            
+            List<Integer> rankedDocIds = rankedEntries.stream()
+                .map(Map.Entry::getKey)
+                .collect(Collectors.toList());
             System.out.println("Ranked " + rankedDocIds.size() + " documents");
 
             // Apply pagination
@@ -137,32 +340,33 @@ public class BackendManager {
 
             // Get the documents for this page, even if it's a partial page
             List<Integer> pagedDocIds = new ArrayList<>();
-            for (int i = startIndex; i < endIndex && i < rankedDocIds.size(); i++) {
-                pagedDocIds.add(rankedDocIds.get(i));
-            }
-
-            // Compute scores for documents
             Map<Integer, Double> docScores = new HashMap<>();
-            for (QueryIndex.DocumentData doc : documents) {
-                double score = 0.0;
-                Map<String, List<Double>> wordInfo = doc.getWordInfo();
-                for (String queryTerm : stemmedQueryWords) {
-                    List<Double> info = wordInfo.get(queryTerm);
-                    if (info != null && info.size() >= 2) {
-                        double tf = info.get(0); // Term frequency
-                        double idf = info.get(1); // IDF
-                        score += tf * idf;
-                    }
-                }
-                score = Ranker.TFIDF_WEIGHT * score + Ranker.PAGERANK_WEIGHT * doc.getPageRank();
-                docScores.put(doc.getDocId(), score);
+            Map<Integer, QueryIndex.DocumentData> docDataMap = new HashMap<>();
+            
+            for (int i = startIndex; i < endIndex && i < rankedDocIds.size(); i++) {
+                Map.Entry<Integer, Double> entry = rankedEntries.get(i);
+                int docId = entry.getKey();
+                pagedDocIds.add(docId);
+                docScores.put(docId, entry.getValue());
+                // Store document data for snippet generation
+                docDataMap.put(docId, documents.stream()
+                    .filter(doc -> doc.getDocId() == docId)
+                    .findFirst()
+                    .orElse(null));
             }
 
             // Get matching documents with their metadata
             List<SearchResult> results = new ArrayList<>();
             if (!pagedDocIds.isEmpty()) {
+                StringBuilder orderByClause = new StringBuilder("ORDER BY CASE id ");
+                for (int i = 0; i < pagedDocIds.size(); i++) {
+                    orderByClause.append("WHEN ").append(pagedDocIds.get(i)).append(" THEN ").append(i).append(" ");
+                }
+                orderByClause.append("END");
+
                 String getResultsSql = "SELECT id, url, title FROM DocumentMetaData WHERE id IN ("
-                        + String.join(",", Collections.nCopies(pagedDocIds.size(), "?")) + ")";
+                        + String.join(",", Collections.nCopies(pagedDocIds.size(), "?")) + ") "
+                        + orderByClause.toString();
                 try (PreparedStatement pstmt = connection.prepareStatement(getResultsSql)) {
                     int paramIndex = 1;
                     for (int docId : pagedDocIds) {
@@ -171,10 +375,20 @@ public class BackendManager {
                     try (ResultSet rs = pstmt.executeQuery()) {
                         while (rs.next()) {
                             int docId = rs.getInt("id");
+                            String title = rs.getString("title");
+                            String url = rs.getString("url");
+                            QueryIndex.DocumentData docData = docDataMap.get(docId);
+                            
+                            // Generate snippet
+                            String snippet = docData != null ? 
+                                generateSnippet(title, url, docData.getWordInfo(), new HashSet<>(queryResult.queryWords)) :
+                                "No preview available for this result.";
+
                             results.add(new SearchResult(
-                                    rs.getString("url"),
-                                    rs.getString("title"),
-                                    docScores.getOrDefault(docId, 0.0)
+                                url,
+                                title,
+                                docScores.getOrDefault(docId, 0.0),
+                                snippet
                             ));
                         }
                     }
@@ -187,10 +401,6 @@ public class BackendManager {
         } catch (SQLException e) {
             System.err.println("Search query failed: " + e.getMessage());
             e.printStackTrace();
-            return new SearchResponse(Collections.emptyList(), 0);
-        } catch (InterruptedException e) {
-            System.err.println("Ranking interrupted: " + e.getMessage());
-            Thread.currentThread().interrupt();
             return new SearchResponse(Collections.emptyList(), 0);
         }
     }
