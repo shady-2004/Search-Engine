@@ -13,6 +13,8 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLConnection;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.sql.*;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -22,10 +24,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
 public class Crawler {
-    private static final int MAX_PAGES = 6000;
+    private static final int MAX_PAGES = 2000;
+    private static final int CHECKPOINT_INTERVAL = 10;
     private static final int MAX_PAGES_PER_DOMAIN = 20;
     private static final int MAX_DEPTH_PER_DOMAIN = 10;
-    private static final int CHECKPOINT_INTERVAL = 50;
     private static final int MAX_QUEUE_SIZE = 10000;
     private static final String[] USER_AGENTS = {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -38,6 +40,7 @@ public class Crawler {
 
     private final Queue<String> urlQueue = new ConcurrentLinkedQueue<>();
     private final Set<String> visitedUrls = ConcurrentHashMap.newKeySet();
+    private final Set<String> contentHashes = ConcurrentHashMap.newKeySet();
     private final Set<String> queuedUrls = ConcurrentHashMap.newKeySet();
     private final AtomicInteger totalCrawledPages = new AtomicInteger(0);
     private final AtomicInteger pendingPages = new AtomicInteger(0);
@@ -69,7 +72,12 @@ public class Crawler {
 
         Thread[] threads = new Thread[numThreads];
         for (int i = 0; i < numThreads; i++) {
-            threads[i] = new Thread(() -> myCrawler.crawl());
+            threads[i] = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    myCrawler.crawl();
+                }
+            });
             threads[i].start();
         }
         for (Thread thread : threads) {
@@ -88,15 +96,17 @@ public class Crawler {
     public Crawler() {
         initializeDatabase();
         totalCrawledPages.set(getRowCount());
-        initializeVisitedUrls();
+        initializeVisitedUrlsAndHashes();
         initializeUrlQueue();
     }
+
 
     public void crawl() {
         activeThreads.incrementAndGet();
         Queue<String> tempQueuedUrls = new LinkedList<>();
         List<String> tempCrawledUrlsBuffer = new ArrayList<>();
         List<String> tempHtmlDocsBuffer = new ArrayList<>();
+        HashSet<String> tempContentHashes = new HashSet<>();
         List<String> tempHtmlTitlesBuffer = new ArrayList<>();
         List<String> tempTimeStampsBuffer = new ArrayList<>();
         List<HashSet<String>> tempListOfExtractedHyperLinksBuffer = new ArrayList<>();
@@ -121,6 +131,7 @@ public class Crawler {
                     pendingPages.decrementAndGet();
                     continue;
                 }
+
 
                 // Check domain limit after marking as visited
                 String domain = getDomain(normalizedUrlStr);
@@ -149,14 +160,23 @@ public class Crawler {
                     continue;
                 }
 
+                String hashedHtml = hashHtmlContent(doc.html());
+                if (!contentHashes.add(hashedHtml)) {
+                    System.out.println(Thread.currentThread().getName() + " - Skipping " + normalizedUrlStr + ": Duplicate content");
+                    domainCount.decrementAndGet(); // Undo reservation
+                    pendingPages.decrementAndGet();
+                    continue;
+                }
+
                 // Increment domain page count
                 queuedUrls.remove(normalizedUrlStr);
                 System.out.println(Thread.currentThread().getName() + " - Successfully downloaded " + normalizedUrlStr);
                 // int totalCrawled = totalCrawledPages.get() + pendingPages.get();
-                // //System.out.println("Total crawled pages: " + totalCrawled + " / " + MAX_PAGES);
+//                 System.out.println("Pending pages: " + pendingPages.get());
 
                 tempCrawledUrlsBuffer.add(normalizedUrlStr);
                 tempHtmlDocsBuffer.add(doc.html());
+                tempContentHashes.add(hashedHtml);
                 tempHtmlTitlesBuffer.add(doc.title());
                 tempTimeStampsBuffer.add(LocalDateTime.now().toString());
                 HashSet<String> hyperLinks = extractLinks(doc);
@@ -185,7 +205,7 @@ public class Crawler {
 
                 if (tempHtmlDocsBuffer.size() >= CHECKPOINT_INTERVAL || totalCrawledPages.get() + pendingPages.get() >= MAX_PAGES) {
 //                    System.out.println(Thread.currentThread().getName() + " - Checkpoint: " + tempHtmlDocsBuffer.size() + " documents to save");
-                    saveDataAtCheckpoint(tempQueuedUrls, tempCrawledUrlsBuffer, tempHtmlDocsBuffer, tempHtmlTitlesBuffer, tempTimeStampsBuffer, tempListOfExtractedHyperLinksBuffer);
+                    saveDataAtCheckpoint(tempQueuedUrls, tempCrawledUrlsBuffer, tempHtmlDocsBuffer, tempContentHashes, tempHtmlTitlesBuffer, tempTimeStampsBuffer, tempListOfExtractedHyperLinksBuffer);
                 }
             }
         } catch (Exception e) {
@@ -193,8 +213,8 @@ public class Crawler {
         } finally {
             activeThreads.decrementAndGet();
             if (!tempCrawledUrlsBuffer.isEmpty()) {
-//                System.out.println(Thread.currentThread().getName() + " - Final save: " + tempCrawledUrlsBuffer.size() + " documents to save");
-                saveDataAtCheckpoint(tempQueuedUrls, tempCrawledUrlsBuffer, tempHtmlDocsBuffer, tempHtmlTitlesBuffer, tempTimeStampsBuffer, tempListOfExtractedHyperLinksBuffer);
+                System.out.println(Thread.currentThread().getName() + " - Final save: " + tempCrawledUrlsBuffer.size() + " documents to save");
+                saveDataAtCheckpoint(tempQueuedUrls, tempCrawledUrlsBuffer, tempHtmlDocsBuffer, tempContentHashes, tempHtmlTitlesBuffer, tempTimeStampsBuffer, tempListOfExtractedHyperLinksBuffer);
             }
         }
     }
@@ -214,28 +234,24 @@ public class Crawler {
         }
     }
 
-    private int insertIntoDB(List<String> tempCrawledUrlsBuffer, List<String> tempHtmlDocsBuffer, List<String> tempHtmlTitlesBuffer,
+    private int insertIntoDB(List<String> tempCrawledUrlsBuffer, List<String> tempHtmlDocsBuffer, HashSet<String> tempContentHashes, List<String> tempHtmlTitlesBuffer,
                              List<String> tempTimeStampsBuffer, List<HashSet<String>> tempListOfExtractedHyperLinksBuffer) {
-        if (tempHtmlDocsBuffer.size() != tempCrawledUrlsBuffer.size() ||
-                tempHtmlDocsBuffer.size() != tempTimeStampsBuffer.size() ||
-                tempHtmlDocsBuffer.size() != tempListOfExtractedHyperLinksBuffer.size()) {
-            System.err.println(Thread.currentThread().getName() + " - Buffer sizes do not match");
-            throw new IllegalArgumentException("Buffer sizes do not match");
-        }
         dbLock.lock();
         java.sql.Connection conn = null;
         try {
             conn = DriverManager.getConnection(DB_URL);
             conn.setAutoCommit(false);
             List<Long> docIds = new ArrayList<>();
+            List<String> contentHashesList = tempContentHashes.stream().toList();
             try (PreparedStatement stmt = conn.prepareStatement(
-                    "INSERT INTO DocumentMetaData (url, title, html, last_crawled_date) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO DocumentMetaData (url, title, html, hash, last_crawled_date) VALUES (?, ?, ?, ?, ?)",
                     Statement.RETURN_GENERATED_KEYS)) {
                 for (int i = 0; i < tempHtmlDocsBuffer.size(); i++) {
                     stmt.setString(1, tempCrawledUrlsBuffer.get(i));
                     stmt.setString(2, tempHtmlTitlesBuffer.get(i));
                     stmt.setString(3, tempHtmlDocsBuffer.get(i));
-                    stmt.setString(4, tempTimeStampsBuffer.get(i));
+                    stmt.setString(4, contentHashesList.get(i));
+                    stmt.setString(5, tempTimeStampsBuffer.get(i));
                     stmt.executeUpdate();
                     ResultSet rs = stmt.getGeneratedKeys();
                     if (rs.next()) {
@@ -253,8 +269,8 @@ public class Crawler {
                 throw new SQLException("Inserted " + docIds.size() + " rows into crawled_pages, expected " +
                         tempHtmlDocsBuffer.size());
             }
-//            System.out.println("Thread " + Thread.currentThread().getName() +
-//                    " - Inserted " + docIds.size() + " rows into crawled_pages");
+            System.out.println("Thread " + Thread.currentThread().getName() +
+                    " - Inserted " + docIds.size() + " rows into crawled_pages");
             try (PreparedStatement stmt = conn.prepareStatement(
                     "INSERT INTO extracted_links (doc_id, extracted_link) VALUES (?, ?)")) {
                 for (int i = 0; i < docIds.size(); i++) {
@@ -297,12 +313,12 @@ public class Crawler {
     }
 
     void saveDataAtCheckpoint(Queue<String> tempUrls, List<String> tempCrawledUrlsBuffer,
-                              List<String> tempHtmlDocsBuffer, List<String> tempHtmlTitles, List<String> tempTimeStampsBuffer, List<HashSet<String>> tempListOfExtractedHyperLinksBuffer) {
+                              List<String> tempHtmlDocsBuffer, HashSet<String> tempContentHashes, List<String> tempHtmlTitles, List<String> tempTimeStampsBuffer, List<HashSet<String>> tempListOfExtractedHyperLinksBuffer) {
         if (!tempUrls.isEmpty()) {
             writeUrlsToFile(tempUrls);
         }
         if (!tempCrawledUrlsBuffer.isEmpty()) {
-            int rowsInserted = insertIntoDB(tempCrawledUrlsBuffer, tempHtmlDocsBuffer, tempHtmlTitles, tempTimeStampsBuffer, tempListOfExtractedHyperLinksBuffer);
+            int rowsInserted = insertIntoDB(tempCrawledUrlsBuffer, tempHtmlDocsBuffer, tempContentHashes, tempHtmlTitles, tempTimeStampsBuffer, tempListOfExtractedHyperLinksBuffer);
             totalCrawledPages.addAndGet(rowsInserted);
             pendingPages.addAndGet(-rowsInserted);
         }
@@ -310,16 +326,18 @@ public class Crawler {
         tempHtmlDocsBuffer.clear();
         tempTimeStampsBuffer.clear();
         tempListOfExtractedHyperLinksBuffer.clear();
+        tempContentHashes.clear();
     }
 
-    private void initializeVisitedUrls() {
+    private void initializeVisitedUrlsAndHashes() {
         try (java.sql.Connection conn = DriverManager.getConnection(DB_URL);
              Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery("SELECT url FROM DocumentMetaData")) {
+             ResultSet rs = stmt.executeQuery("SELECT url, hash FROM DocumentMetaData")) {
             while (rs.next()) {
                 visitedUrls.add(rs.getString("url"));
                 String domain = getDomain(rs.getString("url"));
                 domainPageCounts.computeIfAbsent(domain, k -> new AtomicInteger(0)).incrementAndGet();
+                contentHashes.add(rs.getString("hash"));
             }
         } catch (SQLException e) {
             System.err.println("Failed to read urls: " + e.getMessage());
@@ -360,7 +378,7 @@ public class Crawler {
              ResultSet rs = stmt.executeQuery("SELECT COUNT(*) AS count FROM DocumentMetaData")) {
             if (rs.next()) {
                 int count = rs.getInt("count");
-//                System.out.println("Row count: " + count);
+                System.out.println("Row count: " + count);
                 return count;
             }
         } catch (SQLException e) {
@@ -378,6 +396,7 @@ public class Crawler {
                         url TEXT NOT NULL,
                         title TEXT,
                         html TEXT,
+                        hash TEXT,
                         last_crawled_date TEXT DEFAULT CURRENT_TIMESTAMP,
                         page_rank REAL DEFAULT 0.0
                     )
@@ -460,7 +479,7 @@ public class Crawler {
             String href = anchor.absUrl("href");
             if (href.startsWith("http")) {
                 links.add(href);
-                if (links.size() > MAX_DEPTH_PER_DOMAIN){
+                if (links.size() > MAX_DEPTH_PER_DOMAIN) {
 //                    System.err.println(Thread.currentThread().getName() + " - Skipping " + href + ": Depth limit reached");
                     break;
                 }
@@ -473,7 +492,7 @@ public class Crawler {
         try {
             URI uri = new URI(urlString).normalize();
             String host = uri.getHost();
-            if (host == null){
+            if (host == null) {
                 return null;
             }
             host = host.toLowerCase();
@@ -517,6 +536,21 @@ public class Crawler {
         } catch (URISyntaxException e) {
 //            System.err.println(Thread.currentThread().getName() + " - Error extracting domain from URL: " + url);
             return "";
+        }
+    }
+
+    private static String hashHtmlContent(String html) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("MD5");
+            byte[] hashed = digest.digest(html.getBytes());
+            StringBuilder hexString = new StringBuilder();
+            for (byte b : hashed) {
+                hexString.append(String.format("%02x", b));
+            }
+            return hexString.toString();
+        } catch (NoSuchAlgorithmException e) {
+            System.err.println("Error hashing HTML content: " + e.getMessage());
+            return null;
         }
     }
 }
