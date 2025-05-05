@@ -22,16 +22,17 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
 public class Crawler {
-    private static final int MAX_PAGES = 200;
-    private static final int MAX_PAGES_PER_DOMAIN = 5;
-    private static final int CHECKPOINT_INTERVAL = 20;
+    private static final int MAX_PAGES = 6000;
+    private static final int MAX_PAGES_PER_DOMAIN = 30;
+    private static final int MAX_DEPTH_PER_DOMAIN = 10;
+    private static final int CHECKPOINT_INTERVAL = 50;
     private static final int MAX_QUEUE_SIZE = 10000;
     private static final String[] USER_AGENTS = {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) Gecko/20100101 Firefox/130.0"
     };
-    private static final String URLS_FILE_NAME = "Search-Engine/src/main/resources/urls.txt";
+    private static final String URLS_FILE_NAME = "src/main/resources/urls.txt";
     private final Map<String, BaseRobotRules> robotsCache = new HashMap<>();
     private final ConcurrentHashMap<String, AtomicInteger> domainPageCounts = new ConcurrentHashMap<>();
 
@@ -116,7 +117,7 @@ public class Crawler {
                 }
 
                 if (!visitedUrls.add(normalizedUrlStr)) {
-                    System.err.println(Thread.currentThread().getName() + " - Skipping " + normalizedUrlStr + ": Already visited");
+//                    System.err.println(Thread.currentThread().getName() + " - Skipping " + normalizedUrlStr + ": Already visited");
                     pendingPages.decrementAndGet();
                     continue;
                 }
@@ -150,7 +151,7 @@ public class Crawler {
 
                 // Increment domain page count
                 queuedUrls.remove(normalizedUrlStr);
-                System.out.println(Thread.currentThread().getName() + " - Successfully downloaded " + normalizedUrlStr);
+//                System.out.println(Thread.currentThread().getName() + " - Successfully downloaded " + normalizedUrlStr);
 
                 tempCrawledUrlsBuffer.add(normalizedUrlStr);
                 tempHtmlDocsBuffer.add(doc.html());
@@ -181,7 +182,7 @@ public class Crawler {
                 }
 
                 if (tempHtmlDocsBuffer.size() >= CHECKPOINT_INTERVAL || totalCrawledPages.get() + pendingPages.get() >= MAX_PAGES) {
-                    System.out.println(Thread.currentThread().getName() + " - Checkpoint: " + tempHtmlDocsBuffer.size() + " documents to save");
+//                    System.out.println(Thread.currentThread().getName() + " - Checkpoint: " + tempHtmlDocsBuffer.size() + " documents to save");
                     saveDataAtCheckpoint(tempQueuedUrls, tempCrawledUrlsBuffer, tempHtmlDocsBuffer, tempHtmlTitlesBuffer, tempTimeStampsBuffer, tempListOfExtractedHyperLinksBuffer);
                 }
             }
@@ -190,7 +191,7 @@ public class Crawler {
         } finally {
             activeThreads.decrementAndGet();
             if (!tempCrawledUrlsBuffer.isEmpty()) {
-                System.out.println(Thread.currentThread().getName() + " - Final save: " + tempCrawledUrlsBuffer.size() + " documents to save");
+//                System.out.println(Thread.currentThread().getName() + " - Final save: " + tempCrawledUrlsBuffer.size() + " documents to save");
                 saveDataAtCheckpoint(tempQueuedUrls, tempCrawledUrlsBuffer, tempHtmlDocsBuffer, tempHtmlTitlesBuffer, tempTimeStampsBuffer, tempListOfExtractedHyperLinksBuffer);
             }
         }
@@ -250,8 +251,8 @@ public class Crawler {
                 throw new SQLException("Inserted " + docIds.size() + " rows into crawled_pages, expected " +
                         tempHtmlDocsBuffer.size());
             }
-            System.out.println("Thread " + Thread.currentThread().getName() +
-                    " - Inserted " + docIds.size() + " rows into crawled_pages");
+//            System.out.println("Thread " + Thread.currentThread().getName() +
+//                    " - Inserted " + docIds.size() + " rows into crawled_pages");
             try (PreparedStatement stmt = conn.prepareStatement(
                     "INSERT INTO extracted_links (doc_id, extracted_link) VALUES (?, ?)")) {
                 for (int i = 0; i < docIds.size(); i++) {
@@ -357,7 +358,7 @@ public class Crawler {
              ResultSet rs = stmt.executeQuery("SELECT COUNT(*) AS count FROM DocumentMetaData")) {
             if (rs.next()) {
                 int count = rs.getInt("count");
-                System.out.println("Row count: " + count);
+//                System.out.println("Row count: " + count);
                 return count;
             }
         } catch (SQLException e) {
@@ -367,15 +368,6 @@ public class Crawler {
     }
 
     private void initializeDatabase() {
-        // Create data directory if it doesn't exist
-        File dataDir = new File("data");
-        if (!dataDir.exists()) {
-            if (!dataDir.mkdirs()) {
-                System.err.println("Failed to create data directory");
-                return;
-            }
-        }
-
         try (java.sql.Connection conn = DriverManager.getConnection(DB_URL);
              Statement stmt = conn.createStatement()) {
             stmt.execute("""
@@ -390,7 +382,7 @@ public class Crawler {
             stmt.execute("CREATE TABLE IF NOT EXISTS extracted_links (" +
                     "doc_id INTEGER NOT NULL, " +
                     "extracted_link TEXT NOT NULL, " +
-                    "FOREIGN KEY (doc_id) REFERENCES DocumentMetaData(id) ON DELETE CASCADE)");
+                    "FOREIGN KEY (doc_id) REFERENCES DocumentMetaData(doc_id) ON DELETE CASCADE)");
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_doc_id ON extracted_links(doc_id)");
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_url ON DocumentMetaData(url)");
         } catch (SQLException e) {
@@ -400,8 +392,8 @@ public class Crawler {
 
     private Document fetchHtmlDocument(String url) {
         if (!isAllowedByRobots(url)) {
-            System.err.println(LocalDateTime.now() + ": Thread " + Thread.currentThread().getName() +
-                    " - Skipping " + url + ": Disallowed by robots.txt");
+//            System.err.println(LocalDateTime.now() + ": Thread " + Thread.currentThread().getName() +
+//                    " - Skipping " + url + ": Disallowed by robots.txt");
             return null;
         }
 
@@ -413,19 +405,19 @@ public class Crawler {
 
             int statusCode = response.statusCode();
             if (statusCode != 200) {
-                System.err.println(Thread.currentThread().getName() + " - Failed to fetch " + url + ": Status " + statusCode);
+//                System.err.println(Thread.currentThread().getName() + " - Failed to fetch " + url + ": Status " + statusCode);
                 return null;
             }
 
             String contentType = response.contentType();
             if (contentType == null || !contentType.toLowerCase().startsWith("text/html")) {
-                System.err.println(Thread.currentThread().getName() + " - Skipping " + url + ": Not HTML (" + contentType + ")");
+//                System.err.println(Thread.currentThread().getName() + " - Skipping " + url + ": Not HTML (" + contentType + ")");
                 return null;
             }
 
             return response.parse();
         } catch (IOException e) {
-            System.err.println(Thread.currentThread().getName() + " - Failed to fetch " + url + ": " + e.getMessage());
+//            System.err.println(Thread.currentThread().getName() + " - Failed to fetch " + url + ": " + e.getMessage());
             return null;
         }
     }
@@ -465,6 +457,10 @@ public class Crawler {
             String href = anchor.absUrl("href");
             if (href.startsWith("http")) {
                 links.add(href);
+                if (links.size() > MAX_DEPTH_PER_DOMAIN){
+//                    System.err.println(Thread.currentThread().getName() + " - Skipping " + href + ": Depth limit reached");
+                    break;
+                }
             }
         }
         return links;
@@ -492,7 +488,7 @@ public class Crawler {
             }
             return new URI(scheme, null, host, port, path, query, null).toString();
         } catch (URISyntaxException | NullPointerException e) {
-            System.err.println(Thread.currentThread().getName() + " - Error normalizing URL: " + urlString + " - " + e.getMessage());
+//            System.err.println(Thread.currentThread().getName() + " - Error normalizing URL: " + urlString + " - " + e.getMessage());
             return null;
         }
     }
@@ -516,7 +512,7 @@ public class Crawler {
             String host = uri.getHost();
             return host != null ? host.toLowerCase() : "";
         } catch (URISyntaxException e) {
-            System.err.println(Thread.currentThread().getName() + " - Error extracting domain from URL: " + url);
+//            System.err.println(Thread.currentThread().getName() + " - Error extracting domain from URL: " + url);
             return "";
         }
     }
