@@ -12,7 +12,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.stereotype.Service;
 
 import static com.example.Search.Engine.Data.DataBaseManager.getPageRank;
-
 @Service
 public class Ranker {
     static final int THREADS = 10;
