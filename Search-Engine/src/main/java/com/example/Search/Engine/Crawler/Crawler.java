@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
 public class Crawler {
-    private static final int MAX_PAGES = 1000;
+    private static final int MAX_PAGES = 6000;
     private static final int MAX_PAGES_PER_DOMAIN = 20;
     private static final int MAX_DEPTH_PER_DOMAIN = 10;
     private static final int CHECKPOINT_INTERVAL = 50;
@@ -32,7 +32,7 @@ public class Crawler {
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) Gecko/20100101 Firefox/130.0"
     };
-    private static final String URLS_FILE_NAME = "Search-Engine/src/main/resources/urls.txt";
+    private static final String URLS_FILE_NAME = "src/main/resources/urls.txt";
     private final Map<String, BaseRobotRules> robotsCache = new HashMap<>();
     private final ConcurrentHashMap<String, AtomicInteger> domainPageCounts = new ConcurrentHashMap<>();
 
@@ -154,6 +154,7 @@ public class Crawler {
                 System.out.println(Thread.currentThread().getName() + " - Successfully downloaded " + normalizedUrlStr);
                 // int totalCrawled = totalCrawledPages.get() + pendingPages.get();
                 // //System.out.println("Total crawled pages: " + totalCrawled + " / " + MAX_PAGES);
+
                 tempCrawledUrlsBuffer.add(normalizedUrlStr);
                 tempHtmlDocsBuffer.add(doc.html());
                 tempHtmlTitlesBuffer.add(doc.title());
@@ -359,7 +360,7 @@ public class Crawler {
              ResultSet rs = stmt.executeQuery("SELECT COUNT(*) AS count FROM DocumentMetaData")) {
             if (rs.next()) {
                 int count = rs.getInt("count");
-                System.out.println("Row count: " + count);
+//                System.out.println("Row count: " + count);
                 return count;
             }
         } catch (SQLException e) {
