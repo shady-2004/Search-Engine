@@ -22,8 +22,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
 public class Crawler {
-    private static final int MAX_PAGES = 200;
-    private static final int MAX_PAGES_PER_DOMAIN = 5;
+    private static final int MAX_PAGES = 3000;
+    private static final int MAX_PAGES_PER_DOMAIN = 30;
+    private static final int MAX_DEPTH_PER_DOMAIN = 10;
     private static final int CHECKPOINT_INTERVAL = 20;
     private static final int MAX_QUEUE_SIZE = 10000;
     private static final String[] USER_AGENTS = {
@@ -367,15 +368,6 @@ public class Crawler {
     }
 
     private void initializeDatabase() {
-        // Create data directory if it doesn't exist
-        File dataDir = new File("data");
-        if (!dataDir.exists()) {
-            if (!dataDir.mkdirs()) {
-                System.err.println("Failed to create data directory");
-                return;
-            }
-        }
-
         try (java.sql.Connection conn = DriverManager.getConnection(DB_URL);
              Statement stmt = conn.createStatement()) {
             stmt.execute("""
@@ -384,13 +376,14 @@ public class Crawler {
                         url TEXT NOT NULL,
                         title TEXT,
                         html TEXT,
-                        last_crawled_date TEXT DEFAULT CURRENT_TIMESTAMP
+                        last_crawled_date TEXT DEFAULT CURRENT_TIMESTAMP,
+                        page_rank REAL DEFAULT 0.0
                     )
                     """);
             stmt.execute("CREATE TABLE IF NOT EXISTS extracted_links (" +
                     "doc_id INTEGER NOT NULL, " +
                     "extracted_link TEXT NOT NULL, " +
-                    "FOREIGN KEY (doc_id) REFERENCES DocumentMetaData(id) ON DELETE CASCADE)");
+                    "FOREIGN KEY (doc_id) REFERENCES DocumentMetaData(doc_id) ON DELETE CASCADE)");
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_doc_id ON extracted_links(doc_id)");
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_url ON DocumentMetaData(url)");
         } catch (SQLException e) {
@@ -465,6 +458,10 @@ public class Crawler {
             String href = anchor.absUrl("href");
             if (href.startsWith("http")) {
                 links.add(href);
+                if (links.size() > MAX_DEPTH_PER_DOMAIN){
+//                    System.err.println(Thread.currentThread().getName() + " - Skipping " + href + ": Depth limit reached");
+                    break;
+                }
             }
         }
         return links;

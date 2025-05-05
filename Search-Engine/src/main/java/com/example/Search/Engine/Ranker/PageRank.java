@@ -14,6 +14,14 @@ public class PageRank {
     private static final double damping = 0.85;
     private static final double epsilon = 0.00001;
 
+    public static void main(String[] args) {
+        try {
+            pageRank();
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+
     public static void pageRank() throws SQLException {
 
         Map<Integer, List<Integer>> nodeAdjMap = getGraphFromDB();
@@ -41,6 +49,7 @@ public class PageRank {
         System.out.println("Execution Time: " + elapsedTime + " milliseconds");
 
         setPageRank(probability);
+        System.out.println(probability);
     }
 
 
