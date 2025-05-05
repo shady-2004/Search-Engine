@@ -26,7 +26,6 @@ public class Crawler {
     private static final int MAX_PAGES_PER_DOMAIN = 20;
     private static final int MAX_DEPTH_PER_DOMAIN = 10;
     private static final int CHECKPOINT_INTERVAL = 50;
-
     private static final int MAX_QUEUE_SIZE = 10000;
     private static final String[] USER_AGENTS = {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -152,7 +151,9 @@ public class Crawler {
 
                 // Increment domain page count
                 queuedUrls.remove(normalizedUrlStr);
-//                System.out.println(Thread.currentThread().getName() + " - Successfully downloaded " + normalizedUrlStr);
+                System.out.println(Thread.currentThread().getName() + " - Successfully downloaded " + normalizedUrlStr);
+                // int totalCrawled = totalCrawledPages.get() + pendingPages.get();
+                // //System.out.println("Total crawled pages: " + totalCrawled + " / " + MAX_PAGES);
 
                 tempCrawledUrlsBuffer.add(normalizedUrlStr);
                 tempHtmlDocsBuffer.add(doc.html());

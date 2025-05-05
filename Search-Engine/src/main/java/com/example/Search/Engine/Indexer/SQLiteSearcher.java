@@ -157,13 +157,11 @@ public class SQLiteSearcher implements AutoCloseable {
             }
 
             final String url = doc.getKey();
-            System.out.println("Processing URL: " + url);
-
             CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
                 Connection conn = null;
                 try {
                     conn = getThreadConnection();
-                    conn.setAutoCommit(false); // Ensure we're in transaction mode
+                    conn.setAutoCommit(false);
                     
                     try (PreparedStatement getStmt = conn.prepareStatement(getDocId);
                          PreparedStatement insertStmt = conn.prepareStatement(insertDoc, Statement.RETURN_GENERATED_KEYS)) {
@@ -173,11 +171,9 @@ public class SQLiteSearcher implements AutoCloseable {
                         try (ResultSet rs = getStmt.executeQuery()) {
                             if (rs.next()) {
                                 long existingId = rs.getLong(1);
-                                System.out.println("Found existing document ID " + existingId + " for URL: " + url);
                                 urlToDocId.put(url, existingId);
                             } else {
                                 // Insert new document
-                                System.out.println("Inserting new document for URL: " + url);
                                 insertStmt.setString(1, url);
                                 insertStmt.setString(2, url);
                                 int affectedRows = insertStmt.executeUpdate();
@@ -189,7 +185,6 @@ public class SQLiteSearcher implements AutoCloseable {
                                 try (ResultSet generatedKeys = insertStmt.getGeneratedKeys()) {
                                     if (generatedKeys.next()) {
                                         long newId = generatedKeys.getLong(1);
-                                        System.out.println("Created new document ID " + newId + " for URL: " + url);
                                         urlToDocId.put(url, newId);
                                     } else {
                                         throw new SQLException("Failed to get generated key for URL: " + url);
@@ -198,11 +193,6 @@ public class SQLiteSearcher implements AutoCloseable {
                             }
                         }
                         conn.commit();
-                    } catch (SQLException e) {
-                        if (conn != null) {
-                            conn.rollback();
-                        }
-                        throw e;
                     }
                 } catch (SQLException e) {
                     System.err.println("SQL Error processing URL " + url + ": " + e.getMessage());
