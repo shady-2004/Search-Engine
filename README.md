@@ -85,6 +85,7 @@ The system is composed of several tightly integrated modules, each with a distin
 **Search Results Page:**
 
 <img src="https://github.com/shady-2004/Seekr/blob/main/readme-assets/results.png" alt="results-page" />
+
 ---
 
 ## 🚀 Tech Stack
