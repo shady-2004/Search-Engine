@@ -20,7 +20,7 @@ The system is composed of several tightly integrated modules, each with a distin
 
 ---
 
-### 2. 📖 Index Builder  
+### 2. 📖 Indexer  
 **Purpose:** Constructs an efficient, searchable index from crawled documents.
 
 **Capabilities:**
@@ -31,20 +31,19 @@ The system is composed of several tightly integrated modules, each with a distin
 
 ---
 
-### 3. 🧠 Query Interpreter  
-**Purpose:** Interprets user input and retrieves the most relevant content.
+### 3. 🧠 Query Processor  
+**Purpose:** Processes user queries and retrieves relevant documents from the index.
 
 **Highlights:**
-- Performs stemming to match words with their root forms (e.g., "traveler" → "travel").
-- Intelligent tokenization and noise-word (stopword) filtering.
-- Works seamlessly with ranking and phrase detection modules.
+- Stems query terms to support partial and morphological matches (e.g., travel, traveling, traveler).
+- Filters out noise/stopwords to improve precision.
+- Prepares tokens for downstream phrase and ranking modules.
 
 ---
 
 ### 4. ✏️ Phrase & Boolean Query Handler  
 **Phrase Matching:**
-- Supports exact-phrase retrieval using quotation marks.
-- Ensures word order and proximity for precise results.
+- Supports`quoted` queries to return exact match results with proper word order and proximity.
 
 **Boolean Logic:**
 - Handles `AND`, `OR`, and `NOT` operators with up to two operations per query.  
@@ -52,7 +51,7 @@ The system is composed of several tightly integrated modules, each with a distin
 
 ---
 
-### 5. 📈 Ranking Engine  
+### 5. 📈 Ranker  
 **Purpose:** Sorts search results based on relevance and document authority.
 
 **Ranking Factors:**
@@ -87,16 +86,16 @@ The system is composed of several tightly integrated modules, each with a distin
 <img src="https://github.com/shady-2004/Seekr/blob/main/readme-assets/results.png" alt="results-page" />
 ---
 
-## 🚀 Tech Stack  
+## 🚀 Tech Stack
 
-| Layer       | Technology             |
-|------------|-------------------------|
-| Language    | Java                   |
-| Backend     | Spring Boot            |
-| Database    | SQLite                 |
-| Frontend    | React                  |
-| HTML Parsing| JSoup                  |
-| Multithreading | Java ExecutorService |
+Seekr is built using a modern and lightweight technology stack:
+
+| 🔧 Layer       | 🛠️ Technology   | 📋 Description                            |
+|---------------|------------------|--------------------------------------------|
+| Backend       | **Java**         | Core logic for crawling, indexing, and ranking |
+| Framework     | **Spring Boot**  | REST API development and modular backend structure |
+| Database      | **SQLite**       | Lightweight, file-based storage for indexing and metadata |
+| Frontend      | **React**        | Interactive and responsive web interface for user search experience |
 
 ---
 
