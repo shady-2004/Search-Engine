@@ -43,7 +43,8 @@ The system is composed of several tightly integrated modules, each with a distin
 
 ### 4. ✏️ Phrase & Boolean Query Handler  
 **Phrase Matching:**
-- Supports`quoted` queries to return exact match results with proper word order and proximity.
+- Seekr supports exact-phrase retrieval using quotation marks.
+  **Example:** Searching for `"machine learning"` will return pages that include the full phrase *machine learning* in order.
 
 **Boolean Logic:**
 - Handles `AND`, `OR`, and `NOT` operators with up to two operations per query.  
