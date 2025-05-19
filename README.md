@@ -43,7 +43,7 @@ The system is composed of several tightly integrated modules, each with a distin
 
 ### 4. ✏️ Phrase & Boolean Query Handler  
 **Phrase Matching:**
-- Seekr supports exact-phrase retrieval using quotation marks.  
+- Supports exact-phrase retrieval using quotation marks.  
   **Example:** `"machine learning"`
 
 **Boolean Logic:**
@@ -72,7 +72,7 @@ The system is composed of several tightly integrated modules, each with a distin
 - Developed using **React** for a dynamic, single-page interface.
 - Clean layout similar to popular search engines.
 - Displays result snippets with highlighted query terms.
-- Pagination support (e.g., 20 results per page across 10+ pages).
+- Pagination support (e.g., 10 results per page across 10+ pages).
 - Smart auto-suggestions as users type, based on popular queries.
 
 ---
