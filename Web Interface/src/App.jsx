@@ -16,16 +16,13 @@ function SearchPage({ onSearch }) {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 text-white flex flex-col items-center justify-center">
-      <div className="text-center mb-12">
-        <h1 className="text-6xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 via-purple-500 to-pink-500 animate-gradient mb-4">
-          Search Engine
+      <div className="text-center mb-5">
+        <h1 className="text-6xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 via-purple-500 to-pink-500 animate-gradient pb-4">
+          Seekr
         </h1>
-        <p className="text-gray-400 text-xl">
-          Find what you're looking for with our powerful search engine
-        </p>
       </div>
 
-      <div className="w-full max-w-2xl px-4">
+      <div className="w-1/3 -w-2xl">
         <form onSubmit={handleSubmit} className="relative search-container">
           <div className="relative">
             <input
@@ -36,7 +33,7 @@ function SearchPage({ onSearch }) {
                 setShowSuggestions(true)
               }}
               onFocus={() => setShowSuggestions(true)}
-              placeholder="Enter your search query..."
+              placeholder="Search anything..."
               className="w-full px-8 py-5 text-xl rounded-full bg-gray-800/50 border-2 border-gray-700 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/20 focus:outline-none transition-all duration-300 shadow-lg backdrop-blur-sm"
             />
             <button
@@ -139,8 +136,8 @@ function ResultsPage({ initialQuery, onNewSearch }) {
       <header className="py-4 px-4 border-b border-gray-700">
         <div className="container mx-auto">
           <div className="flex items-center justify-between">
-            <a href="/" className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 via-purple-500 to-pink-500">
-              Search Engine
+            <a href="/" className="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 via-purple-500 to-pink-500">
+              Seekr
             </a>
             <div className="w-full max-w-2xl mx-4">
               <form onSubmit={(e) => { e.preventDefault(); handleSearch(query) }} className="relative search-container">
