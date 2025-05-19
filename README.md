@@ -77,12 +77,14 @@ The system is composed of several tightly integrated modules, each with a distin
 
 ---
 
-## 📷 UI Snapshots  
-**Homepage:**  
-<img src="https://github.com/shady-2004/Seekr/blob/main/readme-assets/home.png" height = "500"  alt="home-page" />
+## 📷 UI Snapshots 
+**Homepage:**
+
+<img src="https://github.com/shady-2004/Seekr/blob/main/readme-assets/home.png"  alt="home-page" />
 
 **Search Results Page:**
-<img src="https://github.com/shady-2004/Seekr/blob/main/readme-assets/results.png" height = "500"  alt="results-page" />
+
+<img src="https://github.com/shady-2004/Seekr/blob/main/readme-assets/results.png" alt="results-page" />
 ---
 
 ## 🚀 Tech Stack  
