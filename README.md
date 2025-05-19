@@ -79,9 +79,10 @@ The system is composed of several tightly integrated modules, each with a distin
 
 ## 📷 UI Snapshots  
 **Homepage:**  
+<img src="https://github.com/shady-2004/Seekr/blob/main/readme-assets/home.png" height = "500"  alt="home-page" />
 
 **Search Results Page:**
-
+<img src="https://github.com/shady-2004/Seekr/blob/main/readme-assets/results.png" height = "500"  alt="home-page" />
 ---
 
 ## 🚀 Tech Stack  
@@ -96,26 +97,4 @@ The system is composed of several tightly integrated modules, each with a distin
 | Multithreading | Java ExecutorService |
 
 ---
-
-## 🧪 Performance Benchmarks  
-
-| Metric                     | Value         |
-|----------------------------|---------------|
-| Indexed Documents          | 6000+         |
-| Indexing Time              | < 2 minutes   |
-| Query Response (1st Result)| 20–50 ms      |
-| Query Response (Next Pages)| < 5 ms        |
-
----
-
-## 🧩 Future Enhancements  
-- Real-time indexing of newly published content.  
-- Spell-check and auto-correct suggestions.  
-- Synonym-based matching and semantic search.  
-- Personalized result reordering.  
-
----
-
-## 👥 Contributors  
-Developed by **Saleh Ahmed** as part of the Java course project at **Cairo University**.
 
