@@ -1,5 +1,5 @@
 # 🔍 Seekr: A Smart Java-Powered Search Engine  
-**Seekr** is a high-performance, scalable search engine built using Java and Spring Boot that simulates the core functionalities of modern search engines. From crawling and indexing web pages to ranking results and handling advanced user queries, Seekr delivers fast and accurate search experiences via a sleek, interactive React-based interface.
+**Seekr** is a high-performance, scalable search engine built with Java that simulates core features of modern search engines, including crawling, indexing, ranking, and advanced query handling. It features a web interface built with React and a backend powered by Spring Boot.
 
 ---
 
