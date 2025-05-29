@@ -101,3 +101,9 @@ Seekr is built using a modern and lightweight technology stack:
 
 ---
 
+## 🤵 Contributors
+
+| <img src="https://avatars.githubusercontent.com/salehahmed99" width="100px" alt="Saleh"> | <img src="https://avatars.githubusercontent.com/shady-2004" width="100px" alt="Shady"> | <img src="https://avatars.githubusercontent.com/im-saif" width="100px" alt="Saif"> | <img src="https://avatars.githubusercontent.com/Mobahgat010" width="100px" alt="Bahgat"> |
+| ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| [Saleh Ahmed](https://github.com/salehahmed99/)                                            | [Shady Mohamed](https://github.com/shady-2004/)                                              | [Saif Eldin](https://github.com/im-saif)                                               | [Mohamed Bahgat](https://github.com/Mobahgat010) |
+
